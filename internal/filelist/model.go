@@ -142,7 +142,7 @@ func (m Model) View() string {
 	} else if m.search != "" {
 		sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 	} else {
-		sb.WriteString(helpStyle.Render(" / search • j/k navigate • enter open • q quit") + "\n\n")
+		sb.WriteString(helpStyle.Render(" / search • j/k navigate • enter open • r reload • q quit") + "\n\n")
 	}
 
 	if len(m.filtered) == 0 {

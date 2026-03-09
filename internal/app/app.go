@@ -61,8 +61,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.screen == screenList && msg.String() == "q" {
-			return m, tea.Quit
+		if m.screen == screenList {
+			switch msg.String() {
+			case "q":
+				return m, tea.Quit
+			case "r":
+				files, err := logs.Scan(m.dir)
+				if err != nil {
+					m.err = fmt.Sprintf("scan error: %v", err)
+				} else {
+					m.err = ""
+					m.filelist = filelist.New(files)
+					m.filelist, _ = m.filelist.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+				}
+				return m, nil
+			}
 		}
 	}
 
