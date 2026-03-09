@@ -308,6 +308,76 @@ func TestCaseToggleWhileSearching(t *testing.T) {
 	}
 }
 
+func TestJumpToLine(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	// enter jump mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	if !m.jumping {
+		t.Fatal("expected jump mode after :")
+	}
+
+	// type line number
+	for _, ch := range "3" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	if m.jumpInput != "3" {
+		t.Errorf("expected jumpInput=3, got %q", m.jumpInput)
+	}
+
+	// confirm
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.jumping {
+		t.Error("should exit jump mode after enter")
+	}
+	if m.jumpInput != "" {
+		t.Error("jumpInput should be cleared after jump")
+	}
+}
+
+func TestJumpEsc(t *testing.T) {
+	lf := makePlainLog(t, "a\nb\nc\n")
+	m := New(lf, 80, 24)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.jumping {
+		t.Error("should exit jump mode after esc")
+	}
+	if m.jumpInput != "" {
+		t.Error("jumpInput should be cleared after esc")
+	}
+}
+
+func TestJumpIgnoresNonDigits(t *testing.T) {
+	lf := makePlainLog(t, "a\nb\nc\n")
+	m := New(lf, 80, 24)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if m.jumpInput != "" {
+		t.Errorf("non-digit should be ignored, got %q", m.jumpInput)
+	}
+}
+
+func TestJumpClampsToMax(t *testing.T) {
+	lf := makePlainLog(t, "a\nb\nc\n")
+	m := New(lf, 80, 24)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	for _, ch := range "9999" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// should not panic — clamped to len(lines)
+	if m.jumping {
+		t.Error("should exit jump mode")
+	}
+}
+
 func TestHighlightLine(t *testing.T) {
 	line := "2024-01-01 ERROR something failed"
 	result := highlightLine(line, "ERROR", false)

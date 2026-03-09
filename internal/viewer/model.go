@@ -43,6 +43,8 @@ type Model struct {
 	filterMode    bool // show only matching lines
 	savedMsg      string
 	showLineNums  bool // toggle line numbers
+	jumping       bool // jump-to-line mode
+	jumpInput     string
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -93,6 +95,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.searching {
 			return m.handleSearch(msg)
 		}
+		if m.jumping {
+			return m.handleJump(msg)
+		}
 		return m.handleNav(msg)
 	}
 
@@ -123,6 +128,11 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "/":
 		m.searching = true
 		m.pattern = ""
+		return m, nil
+
+	case ":":
+		m.jumping = true
+		m.jumpInput = ""
 		return m, nil
 
 	case "tab":
@@ -233,6 +243,46 @@ func (m *Model) applySearch() {
 	if len(m.matches) > 0 {
 		m.viewport.SetYOffset(m.visibleOffset(0))
 	}
+}
+
+func (m Model) handleJump(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.jumping = false
+		m.jumpInput = ""
+	case "enter":
+		m.jumping = false
+		if m.jumpInput == "" {
+			return m, nil
+		}
+		n := 0
+		for _, ch := range m.jumpInput {
+			if ch < '0' || ch > '9' {
+				m.jumpInput = ""
+				return m, nil
+			}
+			n = n*10 + int(ch-'0')
+		}
+		// clamp to valid range
+		if n < 1 {
+			n = 1
+		}
+		if n > len(m.lines) {
+			n = len(m.lines)
+		}
+		m.viewport.SetYOffset(n - 1)
+		m.jumpInput = ""
+	case "backspace", "ctrl+h":
+		if len(m.jumpInput) > 0 {
+			m.jumpInput = m.jumpInput[:len(m.jumpInput)-1]
+		}
+	default:
+		// only accept digits
+		if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+			m.jumpInput += msg.String()
+		}
+	}
+	return m, nil
 }
 
 // lineMatches checks if line contains the pattern, respecting caseSensitive.
@@ -381,6 +431,10 @@ func (m Model) View() string {
 	sb.WriteString(footerStyle.Render(sep) + "\n")
 
 	switch {
+	case m.jumping:
+		sb.WriteString(searchStyle.Render(" :"+m.jumpInput+"█") +
+			footerStyle.Render("  enter to jump • esc cancel"))
+
 	case m.searching:
 		caseFlag := footerStyle.Render("  [tab case:" + caseLabel(m.caseSensitive) + "]")
 		sb.WriteString(searchStyle.Render(" / "+m.pattern+"█") + caseFlag)
