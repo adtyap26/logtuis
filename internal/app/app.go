@@ -70,7 +70,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q":
 				return m, tea.Quit
-			case "r":
+			case "ctrl+r":
 				files, err := logs.Scan(m.dir)
 				if err != nil {
 					m.err = fmt.Sprintf("scan error: %v", err)

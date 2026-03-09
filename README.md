@@ -33,36 +33,45 @@ logtuis /var/log/redis
 
 ### File List
 
-| Key       | Action                            |
-| --------- | --------------------------------- |
-| `j` / `↓` | Move down                         |
-| `k` / `↑` | Move up                           |
-| `g`       | Jump to top                       |
-| `G`       | Jump to bottom                    |
-| `/`       | Fuzzy filter by filename          |
-| `esc`     | Clear search                      |
-| `enter`   | Open selected file                |
-| `r`       | Reload / rescan directory         |
-| `q`       | Quit                              |
+| Key       | Action                        |
+| --------- | ----------------------------- |
+| `j` / `↓` | Move down                     |
+| `k` / `↑` | Move up                       |
+| `g`       | Jump to top                   |
+| `G`       | Jump to bottom                |
+| `/`       | Fuzzy filter by filename      |
+| `esc`     | Clear search                  |
+| `enter`   | Open selected file            |
+| `ctrl+f`  | Grep pattern across all files |
+| `ctrl+r`  | Reload / rescan directory     |
+| `q`       | Quit                          |
+
+### Global Grep (ctrl+f)
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `tab`   | Toggle case-sensitive / insensitive |
+| `enter` | Run grep across all log files       |
+| `esc`   | Cancel                              |
 
 ### Log Viewer
 
-| Key       | Action                              |
-| --------- | ----------------------------------- |
-| `j` / `↓` | Scroll down one line                |
-| `k` / `↑` | Scroll up one line                  |
-| `ctrl+d`  | Scroll down half page               |
-| `ctrl+u`  | Scroll up half page                 |
-| `g`       | Jump to top                         |
-| `G`       | Jump to bottom                      |
-| `/`       | Search pattern in log (like grep)   |
-| `tab`     | Toggle case-sensitive search        |
-| `n`       | Next match                          |
-| `N`       | Previous match                      |
-| `f`       | Filter — show only matching lines   |
+| Key       | Action                               |
+| --------- | ------------------------------------ |
+| `j` / `↓` | Scroll down one line                 |
+| `k` / `↑` | Scroll up one line                   |
+| `ctrl+d`  | Scroll down half page                |
+| `ctrl+u`  | Scroll up half page                  |
+| `g`       | Jump to top                          |
+| `G`       | Jump to bottom                       |
+| `/`       | Search pattern in log (like grep)    |
+| `tab`     | Toggle case-sensitive search         |
+| `n`       | Next match                           |
+| `N`       | Previous match                       |
+| `f`       | Filter — show only matching lines    |
 | `e`       | Export matching lines to `.out` file |
-| `esc`     | Clear search / go back to file list |
-| `q`       | Go back to file list                |
+| `esc`     | Clear search / go back to file list  |
+| `q`       | Go back to file list                 |
 
 ## Search
 
@@ -75,14 +84,14 @@ logtuis /var/log/redis
 
 ## Supported File Formats
 
-| Format | Description |
-|--------|-------------|
-| `*.log` | Plain text logs |
-| `*.txt` | Text files |
-| `*.out` | Exported filter results |
-| `*.log.gz` | Gzip compressed logs |
+| Format                     | Description                                    |
+| -------------------------- | ---------------------------------------------- |
+| `*.log`                    | Plain text logs                                |
+| `*.txt`                    | Text files                                     |
+| `*.out`                    | Exported filter results                        |
+| `*.log.gz`                 | Gzip compressed logs                           |
 | `*.log.1.gz`, `*.log.2.gz` | Rotated compressed logs (Redis, Nginx, syslog) |
-| `*.log.1`, `*.log.2` | Rotated plain logs |
+| `*.log.1`, `*.log.2`       | Rotated plain logs                             |
 
 ## License
 

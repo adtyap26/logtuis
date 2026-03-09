@@ -41,14 +41,15 @@ const (
 
 // Model is the file list screen.
 type Model struct {
-	dir      string
-	all      []logs.LogFile
-	filtered []logs.LogFile
-	cursor   int
-	search   string
-	mode     inputMode
-	width    int
-	height   int
+	dir               string
+	all               []logs.LogFile
+	filtered          []logs.LogFile
+	cursor            int
+	search            string
+	mode              inputMode
+	grepCaseSensitive bool
+	width             int
+	height            int
 }
 
 func New(dir string, files []logs.LogFile) Model {
@@ -145,6 +146,8 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeNormal
 		m.search = ""
+	case "tab":
+		m.grepCaseSensitive = !m.grepCaseSensitive
 	case "enter":
 		if m.search == "" {
 			m.mode = modeNormal
@@ -152,10 +155,11 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		pattern := m.search
 		dir := m.dir
+		cs := m.grepCaseSensitive
 		m.mode = modeNormal
 		m.search = ""
 		return m, func() tea.Msg {
-			content := logs.GrepAll(dir, pattern, false)
+			content := logs.GrepAll(dir, pattern, cs)
 			return GrepResultMsg{
 				Title:   "grep: " + pattern,
 				Content: content,
@@ -199,13 +203,17 @@ func (m Model) View() string {
 	case modeSearch:
 		sb.WriteString(searchStyle.Render(" / "+m.search+"█") + "\n\n")
 	case modeGrep:
+		caseLabel := "insensitive"
+		if m.grepCaseSensitive {
+			caseLabel = "sensitive"
+		}
 		sb.WriteString(grepStyle.Render(" grep all: "+m.search+"█") +
-			statusStyle.Render("  enter to search • esc cancel") + "\n\n")
+			statusStyle.Render("  enter search • tab case:"+caseLabel+" • esc cancel") + "\n\n")
 	default:
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all files • j/k navigate • enter open • r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all files • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 
