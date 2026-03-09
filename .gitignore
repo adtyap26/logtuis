@@ -1,2 +1,4 @@
 logtuis
 *.test
+dist/
+*.out
