@@ -127,7 +127,7 @@ func TestGrepModeEmit(t *testing.T) {
 	if !m.grepLoading {
 		t.Error("expected grepLoading=true after enter")
 	}
-	// cmd is a tea.Batch — run each until we find GrepResultMsg
+	// cmd is a tea.Batch — find GrepStartMsg among the batch
 	msgs := tea.Batch(cmd)()
 	batchMsgs, ok := msgs.(tea.BatchMsg)
 	if !ok {
@@ -135,15 +135,18 @@ func TestGrepModeEmit(t *testing.T) {
 	}
 	var found bool
 	for _, fn := range batchMsgs {
-		if msg, ok := fn().(GrepResultMsg); ok {
+		if msg, ok := fn().(GrepStartMsg); ok {
 			found = true
-			if msg.Title == "" {
-				t.Error("expected non-empty title")
+			if msg.Pattern == "" {
+				t.Error("expected non-empty pattern in GrepStartMsg")
+			}
+			if msg.Ch == nil {
+				t.Error("expected non-nil channel in GrepStartMsg")
 			}
 		}
 	}
 	if !found {
-		t.Error("no GrepResultMsg found in batch")
+		t.Error("no GrepStartMsg found in batch")
 	}
 }
 

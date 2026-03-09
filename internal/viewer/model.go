@@ -79,6 +79,7 @@ func New(file logs.LogFile, width, height int) Model {
 }
 
 // NewVirtual creates a viewer from in-memory content (e.g. grep results).
+// Pass an empty string for content when results will be streamed in via Append.
 // Watch mode is not available for virtual files.
 func NewVirtual(title, content string, width, height int) Model {
 	m := Model{
@@ -87,11 +88,31 @@ func NewVirtual(title, content string, width, height int) Model {
 		height:  height,
 		virtual: true,
 	}
-	m.lines = strings.Split(content, "\n")
 	m.viewport = viewport.New(width, height-3)
 	m.ready = true
-	m.refreshView()
+	if content != "" {
+		m.lines = strings.Split(content, "\n")
+		m.refreshView()
+	}
 	return m
+}
+
+// Append adds content to a virtual viewer as streaming results arrive.
+func (m *Model) Append(content string) {
+	if content == "" {
+		return
+	}
+	content = strings.TrimRight(content, "\n")
+	newLines := strings.Split(content, "\n")
+	savedOffset := m.viewport.YOffset
+	m.lines = append(m.lines, newLines...)
+	m.refreshView()
+	m.viewport.SetYOffset(savedOffset)
+}
+
+// SetTitle updates the title shown in the viewer header.
+func (m *Model) SetTitle(title string) {
+	m.file.Name = title
 }
 
 func (m Model) Init() tea.Cmd {

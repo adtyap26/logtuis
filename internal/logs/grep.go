@@ -245,6 +245,94 @@ func grepFileGo(lf LogFile, re *regexp.Regexp) []string {
 	return matches
 }
 
+// GrepChunk holds grep results from one file, used for streaming.
+// When Done is true, no more chunks will arrive and Total has the final count.
+type GrepChunk struct {
+	Content string
+	Count   int
+	Done    bool
+	Total   int
+}
+
+// GrepStream searches pattern across all log files in dir concurrently,
+// streaming per-file results as each goroutine completes.
+// The returned channel is closed after the Done sentinel is sent.
+func GrepStream(dir, pattern string, caseSensitive bool) <-chan GrepChunk {
+	ch := make(chan GrepChunk, 32)
+	go func() {
+		defer close(ch)
+		if pattern == "" {
+			return
+		}
+		files, err := Scan(dir)
+		if err != nil || len(files) == 0 {
+			return
+		}
+
+		grepBin, _ := exec.LookPath("grep")
+		zcatBin, _ := exec.LookPath("zcat")
+		re := buildRegexp(pattern, caseSensitive)
+
+		type result struct {
+			content string
+			count   int
+		}
+		resultCh := make(chan result, len(files))
+
+		for _, f := range files {
+			go func(lf LogFile) {
+				var lines []string
+				if grepBin != "" {
+					switch {
+					case lf.Compressed && zcatBin != "":
+						lines = grepGzWithZcat(zcatBin, grepBin, lf, pattern, caseSensitive)
+					case !lf.Compressed:
+						lines = grepFileBin(grepBin, lf, pattern, caseSensitive)
+					case re != nil:
+						lines = grepFileGo(lf, re)
+					}
+				} else if re != nil {
+					lines = grepFileGo(lf, re)
+				}
+				var sb strings.Builder
+				for _, l := range lines {
+					sb.WriteString(l)
+				}
+				resultCh <- result{content: sb.String(), count: len(lines)}
+			}(f)
+		}
+
+		total := 0
+		for range files {
+			r := <-resultCh
+			total += r.count
+			if r.content != "" {
+				ch <- GrepChunk{Content: r.content, Count: r.count}
+			}
+		}
+		ch <- GrepChunk{Done: true, Total: total}
+	}()
+	return ch
+}
+
+// grepFileBin runs system grep on a single plain file, returning formatted match lines.
+func grepFileBin(bin string, lf LogFile, pattern string, caseSensitive bool) []string {
+	args := []string{"-En", "--color=never"}
+	if !caseSensitive {
+		args = append(args, "-i")
+	}
+	args = append(args, pattern, lf.Path)
+	out, _ := exec.Command(bin, args...).Output()
+	var lines []string
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		lines = append(lines, string(shortenPath(line, []string{lf.Path}))+"\n")
+	}
+	return lines
+}
+
 // splitPatterns splits a pattern on | and trims spaces — used by viewer search.
 func splitPatterns(pattern string) []string {
 	parts := strings.Split(pattern, "|")

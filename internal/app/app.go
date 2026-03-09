@@ -9,6 +9,21 @@ import (
 	"github.com/permaditya/log-manager/internal/viewer"
 )
 
+// waitForChunk schedules a cmd that blocks until the next GrepChunk arrives.
+func waitForChunk(ch <-chan logs.GrepChunk, pattern string) tea.Cmd {
+	return func() tea.Msg {
+		chunk, ok := <-ch
+		if !ok || chunk.Done {
+			total := 0
+			if ok {
+				total = chunk.Total
+			}
+			return filelist.GrepDoneMsg{Pattern: pattern, Total: total}
+		}
+		return filelist.GrepChunkMsg{Content: chunk.Content, Pattern: pattern, Ch: ch}
+	}
+}
+
 type screen int
 
 const (
@@ -56,11 +71,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenViewer
 		return m, nil
 
-	case filelist.GrepResultMsg:
-		// let filelist reset its loading state before we switch away
-		m.filelist, _ = m.filelist.Update(msg)
-		m.viewer = viewer.NewVirtual(msg.Title, msg.Content, m.width, m.height)
+	case filelist.GrepStartMsg:
+		m.filelist, _ = m.filelist.Update(msg) // clears grepLoading spinner
+		m.viewer = viewer.NewVirtual("grep: "+msg.Pattern+" [searching…]", "", m.width, m.height)
 		m.screen = screenViewer
+		return m, waitForChunk(msg.Ch, msg.Pattern)
+
+	case filelist.GrepChunkMsg:
+		if m.screen == screenViewer {
+			m.viewer.Append(msg.Content)
+			return m, waitForChunk(msg.Ch, msg.Pattern)
+		}
+		return m, nil // user went back — let channel drain naturally
+
+	case filelist.GrepDoneMsg:
+		if m.screen == screenViewer {
+			title := fmt.Sprintf("grep: %s — %d match(es)", msg.Pattern, msg.Total)
+			if msg.Total == 0 {
+				m.viewer.Append(fmt.Sprintf("no matches for %q\n", msg.Pattern))
+				title = fmt.Sprintf("grep: %s — no matches", msg.Pattern)
+			}
+			m.viewer.SetTitle(title)
+		}
 		return m, nil
 
 	case viewer.BackMsg:

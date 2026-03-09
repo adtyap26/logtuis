@@ -15,10 +15,23 @@ type OpenFileMsg struct {
 	File logs.LogFile
 }
 
-// GrepResultMsg is sent when the user runs a global grep.
-type GrepResultMsg struct {
-	Title   string
+// GrepStartMsg is sent immediately when a grep begins — opens the viewer right away.
+type GrepStartMsg struct {
+	Pattern string
+	Ch      <-chan logs.GrepChunk
+}
+
+// GrepChunkMsg carries per-file grep results as they stream in.
+type GrepChunkMsg struct {
 	Content string
+	Pattern string
+	Ch      <-chan logs.GrepChunk
+}
+
+// GrepDoneMsg is sent once all files have been searched.
+type GrepDoneMsg struct {
+	Pattern string
+	Total   int
 }
 
 const previewLines = 10
@@ -90,8 +103,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		}
-	case GrepResultMsg:
-		// result arrived — stop loading
+	case GrepStartMsg:
+		// viewer is about to open — clear the spinner
 		m.grepLoading = false
 	case tea.KeyMsg:
 		switch m.mode {
@@ -187,14 +200,11 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.mode = modeNormal
 		m.search = ""
 		m.grepLoading = true
-		grepCmd := func() tea.Msg {
-			content := logs.GrepAll(dir, pattern, cs)
-			return GrepResultMsg{
-				Title:   "grep: " + pattern,
-				Content: content,
-			}
+		ch := logs.GrepStream(dir, pattern, cs)
+		startCmd := func() tea.Msg {
+			return GrepStartMsg{Pattern: pattern, Ch: ch}
 		}
-		return m, tea.Batch(grepCmd, m.spinner.Tick)
+		return m, tea.Batch(startCmd, m.spinner.Tick)
 	case "backspace", "ctrl+h":
 		if len(m.search) > 0 {
 			m.search = m.search[:len(m.search)-1]
