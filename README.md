@@ -1,14 +1,23 @@
 # logtuis
 
-A lightweight, fast terminal log viewer. Single binary, no dependencies. Supports plain and gzip-compressed log files.
+A lightweight, fast terminal log viewer. Single binary, no dependencies. Supports plain, rotated, and gzip-compressed log files.
 
 ## Install
+
+**Download binary (recommended)**
+
+Go to [Releases](../../releases) and download the binary for your platform, then put it in your `$PATH`.
+
+```bash
+tar -xzf logtuis_v1.0.0_linux_amd64.tar.gz
+mv logtuis /usr/local/bin/
+```
+
+**Build from source**
 
 ```bash
 go build -o logtuis .
 ```
-
-Or download the binary from releases and put it in your `$PATH`.
 
 ## Usage
 
@@ -30,9 +39,10 @@ logtuis /var/log/redis
 | `k` / `↑` | Move up                           |
 | `g`       | Jump to top                       |
 | `G`       | Jump to bottom                    |
-| `/`       | Search / fuzzy filter by filename |
+| `/`       | Fuzzy filter by filename          |
 | `esc`     | Clear search                      |
 | `enter`   | Open selected file                |
+| `r`       | Reload / rescan directory         |
 | `q`       | Quit                              |
 
 ### Log Viewer
@@ -46,16 +56,33 @@ logtuis /var/log/redis
 | `g`       | Jump to top                         |
 | `G`       | Jump to bottom                      |
 | `/`       | Search pattern in log (like grep)   |
+| `tab`     | Toggle case-sensitive search        |
 | `n`       | Next match                          |
 | `N`       | Previous match                      |
+| `f`       | Filter — show only matching lines   |
+| `e`       | Export matching lines to `.out` file |
 | `esc`     | Clear search / go back to file list |
 | `q`       | Go back to file list                |
 
+## Search
+
+- Press `/` to open the search bar
+- Press `tab` while searching to toggle between **case-insensitive** (default) and **case-sensitive**
+- Press `enter` to apply — matching lines are highlighted
+- Press `f` to hide all non-matching lines (filter mode)
+- Press `e` to export matching lines to a `.out` file in the current directory
+- Exported `.out` files are visible in the file list and can be opened in the viewer
+
 ## Supported File Formats
 
-- `*.log` — plain text logs
-- `*.log.gz` — gzip compressed logs
-- `*.log.1.gz`, `*.log.2.gz`, ... — rotated and compressed logs (e.g. Redis, Nginx, syslog)
+| Format | Description |
+|--------|-------------|
+| `*.log` | Plain text logs |
+| `*.txt` | Text files |
+| `*.out` | Exported filter results |
+| `*.log.gz` | Gzip compressed logs |
+| `*.log.1.gz`, `*.log.2.gz` | Rotated compressed logs (Redis, Nginx, syslog) |
+| `*.log.1`, `*.log.2` | Rotated plain logs |
 
 ## License
 
