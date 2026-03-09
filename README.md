@@ -98,4 +98,4 @@ logtuis /var/log/redis
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-2.0 — see [LICENSE](LICENSE).
