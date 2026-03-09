@@ -70,6 +70,7 @@ logtuis /var/log/redis
 | `N`       | Previous match                       |
 | `f`       | Filter — show only matching lines    |
 | `e`       | Export matching lines to `.out` file |
+| `:`       | Jump to line number                  |
 | `esc`     | Clear search / go back to file list  |
 | `q`       | Go back to file list                 |
 
