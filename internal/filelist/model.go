@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/permaditya/log-manager/internal/logs"
@@ -55,13 +56,20 @@ type Model struct {
 	width             int
 	height            int
 	preview           string // cached preview of selected file
+	grepLoading       bool
+	spinner           spinner.Model
 }
 
 func New(dir string, files []logs.LogFile) Model {
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+
 	m := Model{
 		dir:      dir,
 		all:      files,
 		filtered: files,
+		spinner:  sp,
 	}
 	m.updatePreview()
 	return m
@@ -76,6 +84,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+	case spinner.TickMsg:
+		if m.grepLoading {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+	case GrepResultMsg:
+		// result arrived — stop loading
+		m.grepLoading = false
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeSearch:
@@ -169,13 +186,15 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 		cs := m.grepCaseSensitive
 		m.mode = modeNormal
 		m.search = ""
-		return m, func() tea.Msg {
+		m.grepLoading = true
+		grepCmd := func() tea.Msg {
 			content := logs.GrepAll(dir, pattern, cs)
 			return GrepResultMsg{
 				Title:   "grep: " + pattern,
 				Content: content,
 			}
 		}
+		return m, tea.Batch(grepCmd, m.spinner.Tick)
 	case "backspace", "ctrl+h":
 		if len(m.search) > 0 {
 			m.search = m.search[:len(m.search)-1]
@@ -219,10 +238,13 @@ func (m Model) View() string {
 	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n\n")
 
 	// input bar
-	switch m.mode {
-	case modeSearch:
+	switch {
+	case m.grepLoading:
+		sb.WriteString(grepStyle.Render(" grep all: ") + m.spinner.View() +
+			statusStyle.Render(" searching…") + "\n\n")
+	case m.mode == modeSearch:
 		sb.WriteString(searchStyle.Render(" / "+m.search+"█") + "\n\n")
-	case modeGrep:
+	case m.mode == modeGrep:
 		caseLabel := "insensitive"
 		if m.grepCaseSensitive {
 			caseLabel = "sensitive"

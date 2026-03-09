@@ -57,6 +57,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case filelist.GrepResultMsg:
+		// let filelist reset its loading state before we switch away
+		m.filelist, _ = m.filelist.Update(msg)
 		m.viewer = viewer.NewVirtual(msg.Title, msg.Content, m.width, m.height)
 		m.screen = screenViewer
 		return m, nil

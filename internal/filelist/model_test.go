@@ -120,17 +120,30 @@ func TestGrepModeEmit(t *testing.T) {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected cmd on enter in grep mode")
 	}
-	msg := cmd()
-	grepMsg, ok := msg.(GrepResultMsg)
-	if !ok {
-		t.Fatalf("expected GrepResultMsg, got %T", msg)
+	if !m.grepLoading {
+		t.Error("expected grepLoading=true after enter")
 	}
-	if grepMsg.Title == "" {
-		t.Error("expected non-empty title")
+	// cmd is a tea.Batch — run each until we find GrepResultMsg
+	msgs := tea.Batch(cmd)()
+	batchMsgs, ok := msgs.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected tea.BatchMsg, got %T", msgs)
+	}
+	var found bool
+	for _, fn := range batchMsgs {
+		if msg, ok := fn().(GrepResultMsg); ok {
+			found = true
+			if msg.Title == "" {
+				t.Error("expected non-empty title")
+			}
+		}
+	}
+	if !found {
+		t.Error("no GrepResultMsg found in batch")
 	}
 }
 
