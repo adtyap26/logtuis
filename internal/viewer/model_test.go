@@ -2,6 +2,7 @@ package viewer
 
 import (
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -375,6 +376,121 @@ func TestJumpClampsToMax(t *testing.T) {
 	// should not panic — clamped to len(lines)
 	if m.jumping {
 		t.Error("should exit jump mode")
+	}
+}
+
+func TestWatchModeToggle(t *testing.T) {
+	lf := makePlainLog(t, "line1\nline2\n")
+	m := New(lf, 80, 24)
+
+	if m.watching {
+		t.Error("watch should be off initially")
+	}
+
+	// toggle on — should return a tick cmd
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("W")})
+	if !m.watching {
+		t.Error("watch should be on after W")
+	}
+	if cmd == nil {
+		t.Error("expected tick cmd when watch enabled")
+	}
+
+	// toggle off
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("W")})
+	if m.watching {
+		t.Error("watch should be off after second W")
+	}
+}
+
+func TestWatchDisabledForVirtual(t *testing.T) {
+	m := NewVirtual("grep: ERROR", "result line\n", 80, 24)
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("W")})
+	if m.watching {
+		t.Error("watch should not activate for virtual files")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for virtual file watch attempt")
+	}
+}
+
+func TestWatchTickReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := fmt.Sprintf("%s/test.log", dir)
+	os.WriteFile(path, []byte("initial\n"), 0644)
+
+	lf := logs.LogFile{Path: path, Name: "test.log"}
+	m := New(lf, 80, 24)
+
+	// enable watch mode first
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("W")})
+
+	// update the file
+	os.WriteFile(path, []byte("initial\nnew line\n"), 0644)
+
+	// simulate tick
+	m, _ = m.Update(watchTickMsg{})
+
+	count := 0
+	for _, l := range m.lines {
+		if l != "" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected 2 non-empty lines after reload, got %d: %v", count, m.lines)
+	}
+}
+
+func TestORPatternMatching(t *testing.T) {
+	content := "INFO starting\nERROR timeout\nservice_log triggered\nDEBUG skip\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	m = doSearch(t, m, "ERROR|service_log")
+
+	if len(m.matches) != 2 {
+		t.Errorf("expected 2 matches for OR pattern, got %d", len(m.matches))
+	}
+}
+
+func TestORPatternSinglePipe(t *testing.T) {
+	content := "ERROR line\nINFO line\nWARN line\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	m = doSearch(t, m, "ERROR|WARN")
+	if len(m.matches) != 2 {
+		t.Errorf("expected 2 matches, got %d", len(m.matches))
+	}
+}
+
+func TestORPatternFallsBackToSingle(t *testing.T) {
+	content := "ERROR line\nINFO line\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	// no pipe — works as before
+	m = doSearch(t, m, "ERROR")
+	if len(m.matches) != 1 {
+		t.Errorf("expected 1 match, got %d", len(m.matches))
+	}
+}
+
+func TestORPatternCaseSensitive(t *testing.T) {
+	content := "ERROR upper\nerror lower\nWARN upper\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	// enable case sensitive
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = doSearch(t, m, "ERROR|WARN")
+
+	if len(m.matches) != 2 {
+		t.Errorf("case-sensitive OR: expected 2 matches, got %d", len(m.matches))
 	}
 }
 

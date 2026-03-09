@@ -71,14 +71,16 @@ logtuis /var/log/redis
 | `f`       | Filter — show only matching lines    |
 | `e`       | Export matching lines to `.out` file |
 | `:`       | Jump to line number                  |
+| `W`       | Toggle watch mode (auto-reload 2s)   |
 | `esc`     | Clear search / go back to file list  |
 | `q`       | Go back to file list                 |
 
 ## Search
 
 - Press `/` to open the search bar
+- Use `|` for OR matching: `ERROR|WARN|service_log` — like `grep -E`
 - Press `tab` while searching to toggle between **case-insensitive** (default) and **case-sensitive**
-- Press `enter` to apply — matching lines are highlighted
+- Press `enter` to apply — all matching sub-patterns are highlighted
 - Press `f` to hide all non-matching lines (filter mode)
 - Press `e` to export matching lines to a `.out` file in the current directory
 - Exported `.out` files are visible in the file list and can be opened in the viewer

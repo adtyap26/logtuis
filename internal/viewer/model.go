@@ -15,6 +15,17 @@ import (
 // BackMsg is sent when the user navigates back to the file list.
 type BackMsg struct{}
 
+// watchTickMsg is sent on every watch interval.
+type watchTickMsg struct{}
+
+const watchInterval = 2 * time.Second
+
+func watchTick() tea.Cmd {
+	return tea.Tick(watchInterval, func(time.Time) tea.Msg {
+		return watchTickMsg{}
+	})
+}
+
 var (
 	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
 	footerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -45,6 +56,8 @@ type Model struct {
 	showLineNums  bool // toggle line numbers
 	jumping       bool // jump-to-line mode
 	jumpInput     string
+	watching      bool // watch mode — auto-reload every 2s
+	virtual       bool // true for in-memory content (grep results), no watch
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -66,11 +79,13 @@ func New(file logs.LogFile, width, height int) Model {
 }
 
 // NewVirtual creates a viewer from in-memory content (e.g. grep results).
+// Watch mode is not available for virtual files.
 func NewVirtual(title, content string, width, height int) Model {
 	m := Model{
-		file:   logs.LogFile{Name: title},
-		width:  width,
-		height: height,
+		file:    logs.LogFile{Name: title},
+		width:   width,
+		height:  height,
+		virtual: true,
 	}
 	m.lines = strings.Split(content, "\n")
 	m.viewport = viewport.New(width, height-3)
@@ -90,6 +105,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 3
+
+	case watchTickMsg:
+		if m.watching {
+			m.reloadFile()
+			return m, watchTick()
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		if m.searching {
@@ -190,6 +212,16 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.showLineNums = !m.showLineNums
 		m.refreshView()
 		return m, nil
+
+	case "W":
+		if m.virtual {
+			return m, nil // watch not available for grep results
+		}
+		m.watching = !m.watching
+		if m.watching {
+			return m, watchTick()
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -286,21 +318,45 @@ func (m Model) handleJump(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 // lineMatches checks if line contains the pattern, respecting caseSensitive.
-func (m *Model) lineMatches(line string) bool {
-	if m.caseSensitive {
-		return strings.Contains(line, m.pattern)
+// patterns splits the search pattern on | for OR matching.
+func (m *Model) patterns() []string {
+	parts := strings.Split(m.pattern, "|")
+	var result []string
+	for _, p := range parts {
+		if p != "" {
+			result = append(result, p)
+		}
 	}
-	return strings.Contains(strings.ToLower(line), strings.ToLower(m.pattern))
+	return result
+}
+
+func (m *Model) lineMatches(line string) bool {
+	searchLine := line
+	if !m.caseSensitive {
+		searchLine = strings.ToLower(line)
+	}
+	for _, p := range m.patterns() {
+		pat := p
+		if !m.caseSensitive {
+			pat = strings.ToLower(p)
+		}
+		if strings.Contains(searchLine, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshView rebuilds viewport content based on filterMode and showLineNums.
 func (m *Model) refreshView() {
 	width := len(fmt.Sprintf("%d", len(m.lines)))
 
+	pats := m.patterns()
+
 	if m.filterMode {
 		var filtered []string
 		for i, idx := range m.matches {
-			line := highlightLine(m.lines[idx], m.pattern, m.caseSensitive)
+			line := highlightAll(m.lines[idx], pats, m.caseSensitive)
 			filtered = append(filtered, m.prefixLine(line, idx+1, i, width))
 		}
 		m.viewport.SetContent(strings.Join(filtered, "\n"))
@@ -312,7 +368,7 @@ func (m *Model) refreshView() {
 	for i, line := range m.lines {
 		rendered := line
 		if m.pattern != "" && m.lineMatches(line) {
-			rendered = highlightLine(line, m.pattern, m.caseSensitive)
+			rendered = highlightAll(line, pats, m.caseSensitive)
 		}
 		highlighted[i] = m.prefixLine(rendered, i+1, i, width)
 	}
@@ -373,6 +429,17 @@ func (m *Model) exportFiltered() string {
 	return fmt.Sprintf("saved → %s (%d lines)", filename, len(m.matches))
 }
 
+// reloadFile re-reads the file and updates the viewport, keeping scroll at bottom.
+func (m *Model) reloadFile() {
+	content, err := logs.Read(m.file)
+	if err != nil {
+		return
+	}
+	m.lines = strings.Split(content, "\n")
+	m.refreshView()
+	m.viewport.GotoBottom()
+}
+
 func caseLabel(sensitive bool) string {
 	if sensitive {
 		return "sensitive"
@@ -381,6 +448,15 @@ func caseLabel(sensitive bool) string {
 }
 
 // highlightLine wraps matches in the line with color.
+// highlightAll highlights all sub-patterns (split by |) in the line.
+func highlightAll(line string, patterns []string, caseSensitive bool) string {
+	result := line
+	for _, p := range patterns {
+		result = highlightLine(result, p, caseSensitive)
+	}
+	return result
+}
+
 func highlightLine(line, pattern string, caseSensitive bool) string {
 	var result strings.Builder
 	remaining := line
@@ -464,9 +540,17 @@ func (m Model) View() string {
 		if m.showLineNums {
 			lineNumHint = "on"
 		}
+		watchHint := ""
+		if !m.virtual {
+			if m.watching {
+				watchHint = filterStyle.Render("  W watching…")
+			} else {
+				watchHint = footerStyle.Render("  W watch")
+			}
+		}
 		sb.WriteString(footerStyle.Render(
-			fmt.Sprintf("  q back • / search • ctrl+f grep • L line-nums:%s • g/G top/bottom  %d%%", lineNumHint, pct),
-		))
+			fmt.Sprintf("  q back • / search • : jump • L line-nums:%s • g/G top/bottom  %d%%", lineNumHint, pct),
+		) + watchHint)
 	}
 
 	return sb.String()
