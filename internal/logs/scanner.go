@@ -18,6 +18,7 @@ type LogFile struct {
 var plainSuffixes = []string{
 	".log",
 	".txt",
+	".out",
 }
 
 // Scan walks dir and returns all log files.
