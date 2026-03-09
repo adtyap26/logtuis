@@ -35,12 +35,13 @@ type Model struct {
 	ready      bool
 	width      int
 	height     int
-	searching  bool
-	pattern    string
-	matches    []int // line indices that match (in full view)
-	matchIdx   int
-	filterMode bool   // show only matching lines
-	savedMsg   string // transient status after export
+	searching     bool
+	pattern       string
+	caseSensitive bool // when true, search matches exact case
+	matches       []int // line indices that match (in full view)
+	matchIdx      int
+	filterMode    bool   // show only matching lines
+	savedMsg      string // transient status after export
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -108,6 +109,14 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "/":
 		m.searching = true
+		m.pattern = ""
+		return m, nil
+
+	case "tab":
+		m.caseSensitive = !m.caseSensitive
+		if m.pattern != "" {
+			m.applySearch()
+		}
 		return m, nil
 
 	case "f":
@@ -172,6 +181,8 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "enter":
 		m.searching = false
 		m.applySearch()
+	case "tab":
+		m.caseSensitive = !m.caseSensitive
 	case "backspace", "ctrl+h":
 		if len(m.pattern) > 0 {
 			m.pattern = m.pattern[:len(m.pattern)-1]
@@ -192,10 +203,9 @@ func (m *Model) applySearch() {
 		return
 	}
 
-	lower := strings.ToLower(m.pattern)
 	m.matches = nil
 	for i, line := range m.lines {
-		if strings.Contains(strings.ToLower(line), lower) {
+		if m.lineMatches(line) {
 			m.matches = append(m.matches, i)
 		}
 	}
@@ -207,12 +217,20 @@ func (m *Model) applySearch() {
 	}
 }
 
+// lineMatches checks if line contains the pattern, respecting caseSensitive.
+func (m *Model) lineMatches(line string) bool {
+	if m.caseSensitive {
+		return strings.Contains(line, m.pattern)
+	}
+	return strings.Contains(strings.ToLower(line), strings.ToLower(m.pattern))
+}
+
 // refreshView rebuilds viewport content based on filterMode.
 func (m *Model) refreshView() {
 	if m.filterMode {
 		var filtered []string
 		for _, idx := range m.matches {
-			filtered = append(filtered, highlightLine(m.lines[idx], m.pattern, false))
+			filtered = append(filtered, highlightLine(m.lines[idx], m.pattern, m.caseSensitive))
 		}
 		m.viewport.SetContent(strings.Join(filtered, "\n"))
 		m.viewport.GotoTop()
@@ -222,8 +240,8 @@ func (m *Model) refreshView() {
 	// full view with highlights
 	highlighted := make([]string, len(m.lines))
 	for i, line := range m.lines {
-		if strings.Contains(strings.ToLower(line), strings.ToLower(m.pattern)) {
-			highlighted[i] = highlightLine(line, m.pattern, false)
+		if m.lineMatches(line) {
+			highlighted[i] = highlightLine(line, m.pattern, m.caseSensitive)
 		} else {
 			highlighted[i] = line
 		}
@@ -274,22 +292,33 @@ func (m *Model) exportFiltered() string {
 	return fmt.Sprintf("saved → %s (%d lines)", filename, len(m.matches))
 }
 
-// highlightLine wraps matches in the line with color.
-func highlightLine(line, pattern string, _ bool) string {
-	lower := strings.ToLower(line)
-	lowerPat := strings.ToLower(pattern)
+func caseLabel(sensitive bool) string {
+	if sensitive {
+		return "sensitive"
+	}
+	return "insensitive"
+}
 
+// highlightLine wraps matches in the line with color.
+func highlightLine(line, pattern string, caseSensitive bool) string {
 	var result strings.Builder
+	remaining := line
+	searchIn := line
+	if !caseSensitive {
+		searchIn = strings.ToLower(line)
+		pattern = strings.ToLower(pattern)
+	}
+
 	for {
-		idx := strings.Index(lower, lowerPat)
+		idx := strings.Index(searchIn, pattern)
 		if idx < 0 {
-			result.WriteString(line)
+			result.WriteString(remaining)
 			break
 		}
-		result.WriteString(line[:idx])
-		result.WriteString(matchStyle.Render(line[idx : idx+len(pattern)]))
-		line = line[idx+len(pattern):]
-		lower = lower[idx+len(pattern):]
+		result.WriteString(remaining[:idx])
+		result.WriteString(matchStyle.Render(remaining[idx : idx+len(pattern)]))
+		remaining = remaining[idx+len(pattern):]
+		searchIn = searchIn[idx+len(pattern):]
 	}
 	return result.String()
 }
@@ -322,7 +351,8 @@ func (m Model) View() string {
 
 	switch {
 	case m.searching:
-		sb.WriteString(searchStyle.Render(" / " + m.pattern + "█"))
+		caseFlag := footerStyle.Render("  [tab case:" + caseLabel(m.caseSensitive) + "]")
+		sb.WriteString(searchStyle.Render(" / "+m.pattern+"█") + caseFlag)
 
 	case m.savedMsg != "":
 		sb.WriteString(savedStyle.Render("  " + m.savedMsg))
@@ -336,9 +366,11 @@ func (m Model) View() string {
 		if m.filterMode {
 			filterHint = filterStyle.Render("  f all-lines")
 		}
+		caseHint := footerStyle.Render("  tab case:" + caseLabel(m.caseSensitive))
 		sb.WriteString(
 			searchStyle.Render(" /"+m.pattern) +
-				footerStyle.Render(matchInfo+"  n/N next/prev"+filterHint+"  e export  esc clear"),
+				footerStyle.Render(matchInfo+"  n/N next/prev"+filterHint+"  e export  esc clear") +
+				caseHint,
 		)
 
 	default:

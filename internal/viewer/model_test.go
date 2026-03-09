@@ -273,6 +273,41 @@ func TestExportNoMatches(t *testing.T) {
 	}
 }
 
+func TestCaseSensitiveSearch(t *testing.T) {
+	content := "ERROR upper\nerror lower\nError mixed\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	// default: case insensitive — all 3 match
+	m = doSearch(t, m, "ERROR")
+	if len(m.matches) != 3 {
+		t.Errorf("case-insensitive: expected 3 matches, got %d", len(m.matches))
+	}
+
+	// toggle case sensitive
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.caseSensitive {
+		t.Error("expected caseSensitive=true after ctrl+i")
+	}
+	// re-apply same pattern
+	m = doSearch(t, m, "ERROR")
+	if len(m.matches) != 1 {
+		t.Errorf("case-sensitive: expected 1 match, got %d", len(m.matches))
+	}
+}
+
+func TestCaseToggleWhileSearching(t *testing.T) {
+	lf := makePlainLog(t, "ERROR line\n")
+	m := New(lf, 80, 24)
+
+	// open search bar and toggle case mid-typing
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.caseSensitive {
+		t.Error("ctrl+i should toggle case while searching")
+	}
+}
+
 func TestHighlightLine(t *testing.T) {
 	line := "2024-01-01 ERROR something failed"
 	result := highlightLine(line, "ERROR", false)
