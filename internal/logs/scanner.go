@@ -4,16 +4,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // LogFile represents a discovered log file.
 type LogFile struct {
-	Path      string
-	Name      string
+	Path       string
+	Name       string
 	Compressed bool
 }
 
-// Scan walks dir and returns all log files (*.log, *.log.*.gz).
+// plainSuffixes matches files ending with these exact suffixes.
+var plainSuffixes = []string{
+	".log",
+	".txt",
+}
+
+// Scan walks dir and returns all log files.
+// Matches: *.log, *.txt, *.log.gz, *.log.N.gz, *.log.N (rotated, e.g. server.log.2)
 func Scan(dir string) ([]LogFile, error) {
 	var files []LogFile
 
@@ -27,11 +35,11 @@ func Scan(dir string) ([]LogFile, error) {
 			continue
 		}
 		name := e.Name()
-		if isLogFile(name) {
+		if match, compressed := classify(name); match {
 			files = append(files, LogFile{
 				Path:       filepath.Join(dir, name),
 				Name:       name,
-				Compressed: isGzip(name),
+				Compressed: compressed,
 			})
 		}
 	}
@@ -39,18 +47,42 @@ func Scan(dir string) ([]LogFile, error) {
 	return files, nil
 }
 
-func isLogFile(name string) bool {
-	// plain: *.log
-	if strings.HasSuffix(name, ".log") {
-		return true
+// classify returns (isLogFile, isCompressed).
+func classify(name string) (bool, bool) {
+	// plain suffixes: .log, .txt
+	for _, suffix := range plainSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true, false
+		}
 	}
-	// compressed: *.log.gz, *.log.1.gz, *.log.2.gz, etc.
+
+	// gzip compressed: *.log.gz, *.log.N.gz
 	if strings.Contains(name, ".log") && strings.HasSuffix(name, ".gz") {
-		return true
+		return true, true
 	}
-	return false
+
+	// rotated plain: *.log.N (e.g. server.log.2, server.log.10)
+	if isRotatedLog(name) {
+		return true, false
+	}
+
+	return false, false
 }
 
-func isGzip(name string) bool {
-	return strings.HasSuffix(name, ".gz")
+// isRotatedLog matches files like server.log.2, app.log.10
+// Rule: contains ".log." and ends with one or more digits.
+func isRotatedLog(name string) bool {
+	if !strings.Contains(name, ".log.") {
+		return false
+	}
+	suffix := name[strings.LastIndex(name, ".")+1:]
+	if len(suffix) == 0 {
+		return false
+	}
+	for _, ch := range suffix {
+		if !unicode.IsDigit(ch) {
+			return false
+		}
+	}
+	return true
 }

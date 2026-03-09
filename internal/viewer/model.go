@@ -2,7 +2,9 @@ package viewer
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,23 +20,27 @@ var (
 	footerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	searchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	filterStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	matchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("3")).Foreground(lipgloss.Color("0"))
 	currentMatch = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
+	savedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 )
 
 // Model is the log viewer screen.
 type Model struct {
-	file      logs.LogFile
-	viewport  viewport.Model
-	lines     []string // raw lines of the file
-	err       string
-	ready     bool
-	width     int
-	height    int
-	searching bool
-	pattern   string
-	matches   []int // line indices that match
-	matchIdx  int   // current match position
+	file       logs.LogFile
+	viewport   viewport.Model
+	lines      []string // raw lines of the file
+	err        string
+	ready      bool
+	width      int
+	height     int
+	searching  bool
+	pattern    string
+	matches    []int // line indices that match (in full view)
+	matchIdx   int
+	filterMode bool   // show only matching lines
+	savedMsg   string // transient status after export
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -85,41 +91,65 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// clear transient saved message on any key
+	m.savedMsg = ""
+
 	switch msg.String() {
 	case "q", "esc":
 		if m.pattern != "" {
-			// first esc clears search
 			m.pattern = ""
 			m.matches = nil
 			m.matchIdx = 0
+			m.filterMode = false
 			m.viewport.SetContent(strings.Join(m.lines, "\n"))
 			return m, nil
 		}
 		return m, func() tea.Msg { return BackMsg{} }
+
 	case "/":
 		m.searching = true
 		return m, nil
+
+	case "f":
+		if m.pattern != "" {
+			m.filterMode = !m.filterMode
+			m.refreshView()
+		}
+		return m, nil
+
+	case "e":
+		if m.pattern != "" {
+			msg := m.exportFiltered()
+			m.savedMsg = msg
+		}
+		return m, nil
+
 	case "n":
 		if len(m.matches) > 0 {
 			m.matchIdx = (m.matchIdx + 1) % len(m.matches)
-			m.viewport.SetYOffset(m.matches[m.matchIdx])
+			m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
 		}
 		return m, nil
+
 	case "N":
 		if len(m.matches) > 0 {
 			m.matchIdx = (m.matchIdx - 1 + len(m.matches)) % len(m.matches)
-			m.viewport.SetYOffset(m.matches[m.matchIdx])
+			m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
 		}
 		return m, nil
+
 	case "g":
 		m.viewport.GotoTop()
 		return m, nil
+
 	case "G":
 		m.viewport.GotoBottom()
 		return m, nil
+
 	case "ctrl+d":
 		m.viewport.HalfViewDown()
 		return m, nil
+
 	case "ctrl+u":
 		m.viewport.HalfViewUp()
 		return m, nil
@@ -137,6 +167,7 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.pattern = ""
 		m.matches = nil
 		m.matchIdx = 0
+		m.filterMode = false
 		m.viewport.SetContent(strings.Join(m.lines, "\n"))
 	case "enter":
 		m.searching = false
@@ -156,39 +187,97 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m *Model) applySearch() {
 	if m.pattern == "" {
 		m.matches = nil
+		m.filterMode = false
 		m.viewport.SetContent(strings.Join(m.lines, "\n"))
 		return
 	}
 
 	lower := strings.ToLower(m.pattern)
-	var highlighted []string
 	m.matches = nil
-
 	for i, line := range m.lines {
 		if strings.Contains(strings.ToLower(line), lower) {
 			m.matches = append(m.matches, i)
-			highlighted = append(highlighted, highlightLine(line, m.pattern, i == 0))
-		} else {
-			highlighted = append(highlighted, line)
 		}
 	}
 
 	m.matchIdx = 0
-	m.viewport.SetContent(strings.Join(highlighted, "\n"))
+	m.refreshView()
 	if len(m.matches) > 0 {
-		m.viewport.SetYOffset(m.matches[0])
+		m.viewport.SetYOffset(m.visibleOffset(0))
 	}
 }
 
+// refreshView rebuilds viewport content based on filterMode.
+func (m *Model) refreshView() {
+	if m.filterMode {
+		var filtered []string
+		for _, idx := range m.matches {
+			filtered = append(filtered, highlightLine(m.lines[idx], m.pattern, false))
+		}
+		m.viewport.SetContent(strings.Join(filtered, "\n"))
+		m.viewport.GotoTop()
+		return
+	}
+
+	// full view with highlights
+	highlighted := make([]string, len(m.lines))
+	for i, line := range m.lines {
+		if strings.Contains(strings.ToLower(line), strings.ToLower(m.pattern)) {
+			highlighted[i] = highlightLine(line, m.pattern, false)
+		} else {
+			highlighted[i] = line
+		}
+	}
+	m.viewport.SetContent(strings.Join(highlighted, "\n"))
+	if len(m.matches) > 0 {
+		m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
+	}
+}
+
+// visibleOffset returns the line offset in the current view for a match index.
+// In filter mode, match i is at line i. In full mode, it's the actual line index.
+func (m *Model) visibleOffset(idx int) int {
+	if idx < 0 || idx >= len(m.matches) {
+		return 0
+	}
+	if m.filterMode {
+		return idx
+	}
+	return m.matches[idx]
+}
+
+// exportFiltered writes matching lines to a file and returns a status message.
+func (m *Model) exportFiltered() string {
+	if len(m.matches) == 0 {
+		return "nothing to export"
+	}
+
+	var sb strings.Builder
+	for _, idx := range m.matches {
+		sb.WriteString(m.lines[idx])
+		sb.WriteByte('\n')
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("%s.%s.%s.out", m.file.Name, m.pattern, ts)
+	// sanitize filename
+	filename = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) {
+			return '_'
+		}
+		return r
+	}, filename)
+
+	if err := os.WriteFile(filename, []byte(sb.String()), 0644); err != nil {
+		return fmt.Sprintf("export failed: %v", err)
+	}
+	return fmt.Sprintf("saved → %s (%d lines)", filename, len(m.matches))
+}
+
 // highlightLine wraps matches in the line with color.
-func highlightLine(line, pattern string, isCurrent bool) string {
+func highlightLine(line, pattern string, _ bool) string {
 	lower := strings.ToLower(line)
 	lowerPat := strings.ToLower(pattern)
-
-	style := matchStyle
-	if isCurrent {
-		style = currentMatch
-	}
 
 	var result strings.Builder
 	for {
@@ -198,7 +287,7 @@ func highlightLine(line, pattern string, isCurrent bool) string {
 			break
 		}
 		result.WriteString(line[:idx])
-		result.WriteString(style.Render(line[idx : idx+len(pattern)]))
+		result.WriteString(matchStyle.Render(line[idx : idx+len(pattern)]))
 		line = line[idx+len(pattern):]
 		lower = lower[idx+len(pattern):]
 	}
@@ -212,13 +301,15 @@ func (m Model) View() string {
 	if m.file.Compressed {
 		title += " [gz]"
 	}
+	if m.filterMode {
+		title += " [filtered]"
+	}
 	sb.WriteString(headerStyle.Render(" "+title) + "\n")
 
 	if m.err != "" {
 		sb.WriteString(errorStyle.Render("  error: "+m.err) + "\n")
 		return sb.String()
 	}
-
 	if !m.ready {
 		sb.WriteString("  loading...\n")
 		return sb.String()
@@ -229,16 +320,28 @@ func (m Model) View() string {
 	sep := strings.Repeat("─", m.width)
 	sb.WriteString(footerStyle.Render(sep) + "\n")
 
-	if m.searching {
+	switch {
+	case m.searching:
 		sb.WriteString(searchStyle.Render(" / " + m.pattern + "█"))
-	} else if m.pattern != "" {
-		matchInfo := fmt.Sprintf("  [%d/%d matches]", m.matchIdx+1, len(m.matches))
+
+	case m.savedMsg != "":
+		sb.WriteString(savedStyle.Render("  " + m.savedMsg))
+
+	case m.pattern != "":
+		matchInfo := fmt.Sprintf(" [%d/%d]", m.matchIdx+1, len(m.matches))
 		if len(m.matches) == 0 {
-			matchInfo = "  [no matches]"
+			matchInfo = " [no matches]"
 		}
-		sb.WriteString(searchStyle.Render(" /"+m.pattern) + footerStyle.Render(matchInfo+
-			"  n/N next/prev • esc clear"))
-	} else {
+		filterHint := "  f filter-only"
+		if m.filterMode {
+			filterHint = filterStyle.Render("  f all-lines")
+		}
+		sb.WriteString(
+			searchStyle.Render(" /"+m.pattern) +
+				footerStyle.Render(matchInfo+"  n/N next/prev"+filterHint+"  e export  esc clear"),
+		)
+
+	default:
 		pct := int(m.viewport.ScrollPercent() * 100)
 		sb.WriteString(footerStyle.Render(
 			fmt.Sprintf("  q back • / search • j/k scroll • ctrl+d/u page • g/G top/bottom  %d%%", pct),

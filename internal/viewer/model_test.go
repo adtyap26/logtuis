@@ -36,6 +36,16 @@ func makeGzLog(t *testing.T, content string) logs.LogFile {
 	return logs.LogFile{Path: path, Name: "test.log.1.gz", Compressed: true}
 }
 
+func doSearch(t *testing.T, m Model, pattern string) Model {
+	t.Helper()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	for _, ch := range pattern {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return m
+}
+
 func TestNewPlain(t *testing.T) {
 	lf := makePlainLog(t, "hello log\n")
 	m := New(lf, 80, 24)
@@ -69,7 +79,6 @@ func TestNewMissingFile(t *testing.T) {
 func TestBackKey(t *testing.T) {
 	lf := makePlainLog(t, "log content\n")
 	m := New(lf, 80, 24)
-
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if cmd == nil {
 		t.Fatal("expected command on q")
@@ -82,7 +91,6 @@ func TestBackKey(t *testing.T) {
 func TestEscBack(t *testing.T) {
 	lf := makePlainLog(t, "log content\n")
 	m := New(lf, 80, 24)
-
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("expected command on esc")
@@ -112,21 +120,9 @@ func TestSearchFindsMatches(t *testing.T) {
 	content := "INFO starting\nERROR failed\nINFO done\nERROR timeout\n"
 	lf := makePlainLog(t, content)
 	m := New(lf, 80, 24)
-
-	// open search
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	if !m.searching {
-		t.Fatal("expected searching mode")
-	}
-
-	// type "ERROR"
-	for _, ch := range "ERROR" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
+	m = doSearch(t, m, "ERROR")
 	if len(m.matches) != 2 {
-		t.Errorf("expected 2 matches for ERROR, got %d", len(m.matches))
+		t.Errorf("expected 2 matches, got %d", len(m.matches))
 	}
 }
 
@@ -134,46 +130,30 @@ func TestSearchNextPrev(t *testing.T) {
 	content := "ERROR one\nINFO skip\nERROR two\nERROR three\n"
 	lf := makePlainLog(t, content)
 	m := New(lf, 80, 24)
-
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	for _, ch := range "ERROR" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = doSearch(t, m, "ERROR")
 
 	if m.matchIdx != 0 {
-		t.Errorf("expected matchIdx=0, got %d", m.matchIdx)
+		t.Errorf("initial matchIdx=%d, want 0", m.matchIdx)
 	}
-
-	// n advances
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	if m.matchIdx != 1 {
-		t.Errorf("expected matchIdx=1 after n, got %d", m.matchIdx)
+		t.Errorf("after n: matchIdx=%d, want 1", m.matchIdx)
 	}
-
-	// N goes back
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
 	if m.matchIdx != 0 {
-		t.Errorf("expected matchIdx=0 after N, got %d", m.matchIdx)
+		t.Errorf("after N: matchIdx=%d, want 0", m.matchIdx)
 	}
-
-	// wraps around
+	// wrap around backwards
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
 	if m.matchIdx != 2 {
-		t.Errorf("expected matchIdx=2 (wrap), got %d", m.matchIdx)
+		t.Errorf("after wrap N: matchIdx=%d, want 2", m.matchIdx)
 	}
 }
 
 func TestSearchNoMatches(t *testing.T) {
 	lf := makePlainLog(t, "INFO only lines here\n")
 	m := New(lf, 80, 24)
-
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	for _, ch := range "ERROR" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
+	m = doSearch(t, m, "ERROR")
 	if len(m.matches) != 0 {
 		t.Errorf("expected 0 matches, got %d", len(m.matches))
 	}
@@ -186,20 +166,15 @@ func TestSearchEscClears(t *testing.T) {
 	content := "ERROR line\nINFO line\n"
 	lf := makePlainLog(t, content)
 	m := New(lf, 80, 24)
+	m = doSearch(t, m, "ERROR")
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	for _, ch := range "ERROR" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
-	// esc clears pattern, stays in viewer
+	// first esc clears pattern
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.pattern != "" {
 		t.Error("pattern should be cleared after esc")
 	}
 	if len(m.matches) != 0 {
-		t.Error("matches should be cleared after esc")
+		t.Error("matches should be cleared")
 	}
 
 	// second esc sends BackMsg
@@ -212,13 +187,98 @@ func TestSearchEscClears(t *testing.T) {
 	}
 }
 
+func TestFilterMode(t *testing.T) {
+	content := "ERROR one\nINFO skip\nERROR two\nDEBUG ignore\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+	m = doSearch(t, m, "ERROR")
+
+	if m.filterMode {
+		t.Error("filter mode should be off initially")
+	}
+
+	// toggle filter mode on
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if !m.filterMode {
+		t.Error("filter mode should be on after f")
+	}
+	if !strings.Contains(m.View(), "[filtered]") {
+		t.Error("view should show [filtered] label in header")
+	}
+
+	// toggle filter mode off
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if m.filterMode {
+		t.Error("filter mode should be off after second f")
+	}
+}
+
+func TestFilterModeRequiresPattern(t *testing.T) {
+	lf := makePlainLog(t, "INFO line\n")
+	m := New(lf, 80, 24)
+
+	// f without pattern should do nothing
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if m.filterMode {
+		t.Error("filter mode should not activate without a pattern")
+	}
+}
+
+func TestExport(t *testing.T) {
+	// run in temp dir so exported file ends up there
+	origDir, _ := os.Getwd()
+	dir := t.TempDir()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	content := "ERROR one\nINFO skip\nERROR two\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+	m = doSearch(t, m, "ERROR")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.savedMsg == "" {
+		t.Error("expected saved message after export")
+	}
+	if strings.Contains(m.savedMsg, "failed") {
+		t.Errorf("export failed: %s", m.savedMsg)
+	}
+
+	// verify a file was created
+	entries, _ := os.ReadDir(dir)
+	var found bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".out") {
+			found = true
+			data, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) != 2 {
+				t.Errorf("expected 2 exported lines, got %d", len(lines))
+			}
+		}
+	}
+	if !found {
+		t.Error("no .out file was created")
+	}
+}
+
+func TestExportNoMatches(t *testing.T) {
+	lf := makePlainLog(t, "INFO only\n")
+	m := New(lf, 80, 24)
+	m = doSearch(t, m, "ERROR")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if !strings.Contains(m.savedMsg, "nothing") {
+		t.Errorf("expected 'nothing to export', got: %s", m.savedMsg)
+	}
+}
+
 func TestHighlightLine(t *testing.T) {
 	line := "2024-01-01 ERROR something failed"
 	result := highlightLine(line, "ERROR", false)
 	if !strings.Contains(result, "ERROR") {
 		t.Error("highlighted line should still contain ERROR text")
 	}
-	// non-match portion should still be present
 	if !strings.Contains(result, "2024-01-01") {
 		t.Error("highlighted line should preserve non-matching content")
 	}
