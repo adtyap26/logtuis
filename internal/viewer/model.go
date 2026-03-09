@@ -323,6 +323,7 @@ func (m *Model) patterns() []string {
 	parts := strings.Split(m.pattern, "|")
 	var result []string
 	for _, p := range parts {
+		p = strings.TrimSpace(p)
 		if p != "" {
 			result = append(result, p)
 		}

@@ -468,6 +468,18 @@ func TestORPatternSinglePipe(t *testing.T) {
 	}
 }
 
+func TestORPatternTrimsSpaces(t *testing.T) {
+	content := "ERROR timeout\nAPI call failed\nINFO skip\n"
+	lf := makePlainLog(t, content)
+	m := New(lf, 80, 24)
+
+	// spaces around | should still match
+	m = doSearch(t, m, "ERROR | API")
+	if len(m.matches) != 2 {
+		t.Errorf("expected 2 matches with spaces around |, got %d", len(m.matches))
+	}
+}
+
 func TestORPatternFallsBackToSingle(t *testing.T) {
 	content := "ERROR line\nINFO line\n"
 	lf := makePlainLog(t, content)
