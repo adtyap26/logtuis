@@ -21,7 +21,7 @@ func makeFiles(names ...string) []logs.LogFile {
 
 func TestNew(t *testing.T) {
 	files := makeFiles("app.log", "redis.log.1.gz")
-	m := New(files)
+	m := New("/tmp", files)
 	if len(m.all) != 2 {
 		t.Errorf("expected 2 files, got %d", len(m.all))
 	}
@@ -32,39 +32,28 @@ func TestNew(t *testing.T) {
 
 func TestNavigation(t *testing.T) {
 	files := makeFiles("a.log", "b.log", "c.log")
-	m := New(files)
+	m := New("/tmp", files)
 
-	// move down
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.cursor != 1 {
 		t.Errorf("cursor after j: got %d, want 1", m.cursor)
 	}
-
-	// move down again
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.cursor != 2 {
 		t.Errorf("cursor after jj: got %d, want 2", m.cursor)
 	}
-
-	// can't go past end
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.cursor != 2 {
 		t.Errorf("cursor should stay at 2, got %d", m.cursor)
 	}
-
-	// move up
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 	if m.cursor != 1 {
 		t.Errorf("cursor after k: got %d, want 1", m.cursor)
 	}
-
-	// G goes to bottom
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 	if m.cursor != 2 {
 		t.Errorf("cursor after G: got %d, want 2", m.cursor)
 	}
-
-	// g goes to top
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	if m.cursor != 0 {
 		t.Errorf("cursor after g: got %d, want 0", m.cursor)
@@ -73,24 +62,20 @@ func TestNavigation(t *testing.T) {
 
 func TestFuzzySearch(t *testing.T) {
 	files := makeFiles("app.log", "redis.log", "nginx.log", "redis.log.1.gz")
-	m := New(files)
+	m := New("/tmp", files)
 
-	// enter search mode
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	if !m.searching {
-		t.Fatal("expected searching mode")
+	if m.mode != modeSearch {
+		t.Fatal("expected modeSearch")
 	}
 
-	// type "redis"
 	for _, ch := range "redis" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
 	}
-
 	if len(m.filtered) != 2 {
 		t.Errorf("expected 2 redis files, got %d", len(m.filtered))
 	}
 
-	// esc clears search
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.search != "" {
 		t.Error("search should be cleared after esc")
@@ -100,15 +85,63 @@ func TestFuzzySearch(t *testing.T) {
 	}
 }
 
+func TestGrepMode(t *testing.T) {
+	files := makeFiles("app.log")
+	m := New("/tmp", files)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	if m.mode != modeGrep {
+		t.Fatal("expected modeGrep after ctrl+f")
+	}
+
+	for _, ch := range "ERROR" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	if m.search != "ERROR" {
+		t.Errorf("expected search=ERROR, got %q", m.search)
+	}
+
+	// esc cancels grep mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeNormal {
+		t.Error("expected modeNormal after esc")
+	}
+	if m.search != "" {
+		t.Error("expected search cleared")
+	}
+}
+
+func TestGrepModeEmit(t *testing.T) {
+	files := makeFiles("app.log")
+	m := New("/tmp", files)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	for _, ch := range "ERROR" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected cmd on enter in grep mode")
+	}
+	msg := cmd()
+	grepMsg, ok := msg.(GrepResultMsg)
+	if !ok {
+		t.Fatalf("expected GrepResultMsg, got %T", msg)
+	}
+	if grepMsg.Title == "" {
+		t.Error("expected non-empty title")
+	}
+}
+
 func TestOpenFile(t *testing.T) {
 	files := makeFiles("app.log")
-	m := New(files)
+	m := New("/tmp", files)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a command when pressing enter")
 	}
-
 	msg := cmd()
 	openMsg, ok := msg.(OpenFileMsg)
 	if !ok {
@@ -120,7 +153,7 @@ func TestOpenFile(t *testing.T) {
 }
 
 func TestOpenFileEmpty(t *testing.T) {
-	m := New(nil)
+	m := New("/tmp", nil)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Error("expected no command when no files")

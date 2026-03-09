@@ -36,7 +36,7 @@ func New(dir string) Model {
 	return Model{
 		dir:      dir,
 		screen:   screenList,
-		filelist: filelist.New(files),
+		filelist: filelist.New(dir, files),
 		err:      errMsg,
 	}
 }
@@ -56,6 +56,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenViewer
 		return m, nil
 
+	case filelist.GrepResultMsg:
+		m.viewer = viewer.NewVirtual(msg.Title, msg.Content, m.width, m.height)
+		m.screen = screenViewer
+		return m, nil
+
 	case viewer.BackMsg:
 		m.screen = screenList
 		return m, nil
@@ -71,7 +76,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = fmt.Sprintf("scan error: %v", err)
 				} else {
 					m.err = ""
-					m.filelist = filelist.New(files)
+					m.filelist = filelist.New(m.dir, files)
 					m.filelist, _ = m.filelist.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 				}
 				return m, nil

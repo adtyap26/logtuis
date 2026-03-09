@@ -14,29 +14,46 @@ type OpenFileMsg struct {
 	File logs.LogFile
 }
 
+// GrepResultMsg is sent when the user runs a global grep.
+type GrepResultMsg struct {
+	Title   string
+	Content string
+}
+
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	normalStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
 	gzStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	searchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	grepStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
+type inputMode int
+
+const (
+	modeNormal inputMode = iota
+	modeSearch           // / fuzzy filter
+	modeGrep             // ctrl+f global grep
+)
+
 // Model is the file list screen.
 type Model struct {
-	all       []logs.LogFile
-	filtered  []logs.LogFile
-	cursor    int
-	search    string
-	searching bool
-	width     int
-	height    int
+	dir      string
+	all      []logs.LogFile
+	filtered []logs.LogFile
+	cursor   int
+	search   string
+	mode     inputMode
+	width    int
+	height   int
 }
 
-func New(files []logs.LogFile) Model {
+func New(dir string, files []logs.LogFile) Model {
 	return Model{
+		dir:      dir,
 		all:      files,
 		filtered: files,
 	}
@@ -52,10 +69,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
-		if m.searching {
+		switch m.mode {
+		case modeSearch:
 			return m.handleSearch(msg)
+		case modeGrep:
+			return m.handleGrepInput(msg)
+		default:
+			return m.handleNav(msg)
 		}
-		return m.handleNav(msg)
 	}
 	return m, nil
 }
@@ -77,10 +98,14 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 		}
 	case "/":
-		m.searching = true
+		m.mode = modeSearch
+		m.search = ""
+	case "ctrl+f":
+		m.mode = modeGrep
+		m.search = ""
 	case "esc":
 		m.search = ""
-		m.searching = false
+		m.mode = modeNormal
 		m.applyFilter()
 	case "enter":
 		if len(m.filtered) > 0 {
@@ -96,11 +121,11 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.searching = false
+		m.mode = modeNormal
 		m.search = ""
 		m.applyFilter()
 	case "enter":
-		m.searching = false
+		m.mode = modeNormal
 	case "backspace", "ctrl+h":
 		if len(m.search) > 0 {
 			m.search = m.search[:len(m.search)-1]
@@ -110,6 +135,39 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if len(msg.String()) == 1 {
 			m.search += msg.String()
 			m.applyFilter()
+		}
+	}
+	return m, nil
+}
+
+func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.search = ""
+	case "enter":
+		if m.search == "" {
+			m.mode = modeNormal
+			return m, nil
+		}
+		pattern := m.search
+		dir := m.dir
+		m.mode = modeNormal
+		m.search = ""
+		return m, func() tea.Msg {
+			content := logs.GrepAll(dir, pattern, false)
+			return GrepResultMsg{
+				Title:   "grep: " + pattern,
+				Content: content,
+			}
+		}
+	case "backspace", "ctrl+h":
+		if len(m.search) > 0 {
+			m.search = m.search[:len(m.search)-1]
+		}
+	default:
+		if len(msg.String()) == 1 {
+			m.search += msg.String()
 		}
 	}
 	return m, nil
@@ -137,12 +195,18 @@ func (m Model) View() string {
 
 	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n\n")
 
-	if m.searching {
+	switch m.mode {
+	case modeSearch:
 		sb.WriteString(searchStyle.Render(" / "+m.search+"█") + "\n\n")
-	} else if m.search != "" {
-		sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
-	} else {
-		sb.WriteString(helpStyle.Render(" / search • j/k navigate • enter open • r reload • q quit") + "\n\n")
+	case modeGrep:
+		sb.WriteString(grepStyle.Render(" grep all: "+m.search+"█") +
+			statusStyle.Render("  enter to search • esc cancel") + "\n\n")
+	default:
+		if m.search != "" {
+			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
+		} else {
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all files • j/k navigate • enter open • r reload • q quit") + "\n\n")
+		}
 	}
 
 	if len(m.filtered) == 0 {
@@ -173,7 +237,6 @@ func (m Model) View() string {
 		if f.Compressed {
 			nameStyle = gzStyle
 		}
-
 		if i == m.cursor {
 			sb.WriteString(selectedStyle.Render(" > ") + nameStyle.Render(f.Name) + "\n")
 		} else {

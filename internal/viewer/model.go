@@ -28,20 +28,21 @@ var (
 
 // Model is the log viewer screen.
 type Model struct {
-	file       logs.LogFile
-	viewport   viewport.Model
-	lines      []string // raw lines of the file
-	err        string
-	ready      bool
-	width      int
-	height     int
+	file          logs.LogFile
+	viewport      viewport.Model
+	lines         []string // raw lines of the file
+	err           string
+	ready         bool
+	width         int
+	height        int
 	searching     bool
 	pattern       string
-	caseSensitive bool // when true, search matches exact case
+	caseSensitive bool  // when true, search matches exact case
 	matches       []int // line indices that match (in full view)
 	matchIdx      int
-	filterMode    bool   // show only matching lines
-	savedMsg      string // transient status after export
+	filterMode    bool // show only matching lines
+	savedMsg      string
+	showLineNums  bool // toggle line numbers
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -55,12 +56,24 @@ func New(file logs.LogFile, width, height int) Model {
 		m.err = err.Error()
 		return m
 	}
-
 	m.lines = strings.Split(content, "\n")
-	vp := viewport.New(width, height-3)
-	vp.SetContent(content)
-	m.viewport = vp
+	m.viewport = viewport.New(width, height-3)
 	m.ready = true
+	m.refreshView()
+	return m
+}
+
+// NewVirtual creates a viewer from in-memory content (e.g. grep results).
+func NewVirtual(title, content string, width, height int) Model {
+	m := Model{
+		file:   logs.LogFile{Name: title},
+		width:  width,
+		height: height,
+	}
+	m.lines = strings.Split(content, "\n")
+	m.viewport = viewport.New(width, height-3)
+	m.ready = true
+	m.refreshView()
 	return m
 }
 
@@ -162,6 +175,11 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "ctrl+u":
 		m.viewport.HalfViewUp()
 		return m, nil
+
+	case "L":
+		m.showLineNums = !m.showLineNums
+		m.refreshView()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -225,31 +243,44 @@ func (m *Model) lineMatches(line string) bool {
 	return strings.Contains(strings.ToLower(line), strings.ToLower(m.pattern))
 }
 
-// refreshView rebuilds viewport content based on filterMode.
+// refreshView rebuilds viewport content based on filterMode and showLineNums.
 func (m *Model) refreshView() {
+	width := len(fmt.Sprintf("%d", len(m.lines)))
+
 	if m.filterMode {
 		var filtered []string
-		for _, idx := range m.matches {
-			filtered = append(filtered, highlightLine(m.lines[idx], m.pattern, m.caseSensitive))
+		for i, idx := range m.matches {
+			line := highlightLine(m.lines[idx], m.pattern, m.caseSensitive)
+			filtered = append(filtered, m.prefixLine(line, idx+1, i, width))
 		}
 		m.viewport.SetContent(strings.Join(filtered, "\n"))
 		m.viewport.GotoTop()
 		return
 	}
 
-	// full view with highlights
 	highlighted := make([]string, len(m.lines))
 	for i, line := range m.lines {
-		if m.lineMatches(line) {
-			highlighted[i] = highlightLine(line, m.pattern, m.caseSensitive)
-		} else {
-			highlighted[i] = line
+		rendered := line
+		if m.pattern != "" && m.lineMatches(line) {
+			rendered = highlightLine(line, m.pattern, m.caseSensitive)
 		}
+		highlighted[i] = m.prefixLine(rendered, i+1, i, width)
 	}
 	m.viewport.SetContent(strings.Join(highlighted, "\n"))
 	if len(m.matches) > 0 {
 		m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
 	}
+}
+
+var lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
+// prefixLine optionally prepends a line number.
+func (m *Model) prefixLine(line string, lineNum, _ int, width int) string {
+	if !m.showLineNums {
+		return line
+	}
+	num := fmt.Sprintf("%*d  ", width, lineNum)
+	return lineNumStyle.Render(num) + line
 }
 
 // visibleOffset returns the line offset in the current view for a match index.
@@ -375,8 +406,12 @@ func (m Model) View() string {
 
 	default:
 		pct := int(m.viewport.ScrollPercent() * 100)
+		lineNumHint := "off"
+		if m.showLineNums {
+			lineNumHint = "on"
+		}
 		sb.WriteString(footerStyle.Render(
-			fmt.Sprintf("  q back • / search • j/k scroll • ctrl+d/u page • g/G top/bottom  %d%%", pct),
+			fmt.Sprintf("  q back • / search • ctrl+f grep • L line-nums:%s • g/G top/bottom  %d%%", lineNumHint, pct),
 		))
 	}
 
