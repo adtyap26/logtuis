@@ -436,14 +436,26 @@ func (m *Model) exportFiltered() string {
 	}
 
 	ts := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("%s.%s.%s.out", m.file.Name, m.pattern, ts)
-	// sanitize filename
+	// Use just the bare file name (strip grep result metadata) and the in-viewer pattern.
+	baseName := m.file.Name
+	if m.virtual {
+		// For grep results the name is "grep: <pattern> — N match(es)"; use "grep" prefix only.
+		baseName = "grep"
+	}
+	filename := fmt.Sprintf("%s.%s.%s.out", baseName, m.pattern, ts)
+	// Keep only alphanumerics, dots, and hyphens; collapse everything else to underscores.
 	filename = strings.Map(func(r rune) rune {
-		if strings.ContainsRune(`/\:*?"<>|`, r) {
-			return '_'
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '.' {
+			return r
 		}
-		return r
+		return '_'
 	}, filename)
+	// Collapse consecutive underscores.
+	for strings.Contains(filename, "__") {
+		filename = strings.ReplaceAll(filename, "__", "_")
+	}
+	filename = strings.Trim(filename, "_")
 
 	if err := os.WriteFile(filename, []byte(sb.String()), 0644); err != nil {
 		return fmt.Sprintf("export failed: %v", err)
