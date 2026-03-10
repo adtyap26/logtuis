@@ -251,6 +251,10 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Paste {
+		m.pattern += string(msg.Runes)
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.searching = false

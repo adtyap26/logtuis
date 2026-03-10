@@ -35,7 +35,7 @@ type GrepDoneMsg struct {
 	Total   int
 }
 
-const previewLines = 10
+const previewLines = 15
 
 var (
 	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
@@ -226,6 +226,11 @@ func makeArchiveCmd(files []logs.LogFile) tea.Cmd {
 }
 
 func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Paste {
+		m.search += string(msg.Runes)
+		m.applyFilter()
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
@@ -248,6 +253,10 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Paste {
+		m.search += string(msg.Runes)
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
