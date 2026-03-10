@@ -74,7 +74,7 @@ type Model struct {
 	cursor            int
 	search            string
 	mode              inputMode
-	grepCaseSensitive bool
+	shellCursor       int // cursor position in grep/shell input (rune index)
 	width             int
 	height            int
 	preview           string // cached preview of selected file
@@ -186,6 +186,7 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "ctrl+f":
 		m.mode = modeGrep
 		m.search = ""
+		m.shellCursor = 0
 	case "esc":
 		if m.selecting {
 			m.selecting = false
@@ -253,42 +254,96 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
+	r := []rune(m.search)
+	cur := m.shellCursor
+
 	if msg.Paste {
-		m.search += string(msg.Runes)
+		pasted := []rune(string(msg.Runes))
+		r = append(r[:cur], append(pasted, r[cur:]...)...)
+		m.search = string(r)
+		m.shellCursor = cur + len(pasted)
 		return m, nil
 	}
+
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
 		m.search = ""
-	case "tab":
-		m.grepCaseSensitive = !m.grepCaseSensitive
+		m.shellCursor = 0
 	case "enter":
 		if m.search == "" {
 			m.mode = modeNormal
 			return m, nil
 		}
-		pattern := m.search
-		dir := m.dir
-		cs := m.grepCaseSensitive
+		cmd := m.search
 		m.mode = modeNormal
 		m.search = ""
+		m.shellCursor = 0
 		m.grepLoading = true
-		ch := logs.GrepStream(dir, pattern, cs)
+		ch := logs.ShellStream(cmd)
 		startCmd := func() tea.Msg {
-			return GrepStartMsg{Pattern: pattern, Ch: ch}
+			return GrepStartMsg{Pattern: cmd, Ch: ch}
 		}
 		return m, tea.Batch(startCmd, m.spinner.Tick)
+	case "left":
+		if cur > 0 {
+			m.shellCursor = cur - 1
+		}
+	case "right":
+		if cur < len(r) {
+			m.shellCursor = cur + 1
+		}
+	case "ctrl+left", "alt+left":
+		m.shellCursor = wordLeft(r, cur)
+	case "ctrl+right", "alt+right":
+		m.shellCursor = wordRight(r, cur)
+	case "ctrl+a":
+		m.shellCursor = 0
+	case "ctrl+e":
+		m.shellCursor = len(r)
+	case "ctrl+k":
+		m.search = string(r[:cur])
+	case "ctrl+w":
+		newCur := wordLeft(r, cur)
+		m.search = string(r[:newCur]) + string(r[cur:])
+		m.shellCursor = newCur
 	case "backspace", "ctrl+h":
-		if len(m.search) > 0 {
-			m.search = m.search[:len(m.search)-1]
+		if cur > 0 {
+			m.search = string(r[:cur-1]) + string(r[cur:])
+			m.shellCursor = cur - 1
 		}
 	default:
-		if len(msg.String()) == 1 {
-			m.search += msg.String()
+		if len(msg.Runes) == 1 {
+			r = append(r[:cur], append([]rune{msg.Runes[0]}, r[cur:]...)...)
+			m.search = string(r)
+			m.shellCursor = cur + 1
 		}
 	}
 	return m, nil
+}
+
+// wordLeft returns the rune index of the start of the word to the left of pos.
+func wordLeft(r []rune, pos int) int {
+	i := pos
+	for i > 0 && r[i-1] == ' ' {
+		i--
+	}
+	for i > 0 && r[i-1] != ' ' {
+		i--
+	}
+	return i
+}
+
+// wordRight returns the rune index of the end of the word to the right of pos.
+func wordRight(r []rune, pos int) int {
+	i := pos
+	for i < len(r) && r[i] == ' ' {
+		i++
+	}
+	for i < len(r) && r[i] != ' ' {
+		i++
+	}
+	return i
 }
 
 func (m *Model) applyFilter() {
@@ -355,22 +410,21 @@ func (m Model) View() string {
 		sb.WriteString(checkedStyle.Render(fmt.Sprintf(" V select [%d selected]", len(m.selected))) +
 			statusStyle.Render("  space toggle • j/k move+mark • enter archive • esc cancel") + "\n\n")
 	case m.grepLoading:
-		sb.WriteString(grepStyle.Render(" grep all: ") + m.spinner.View() +
-			statusStyle.Render(" searching…") + "\n\n")
+		sb.WriteString(grepStyle.Render(" shell: ") + m.spinner.View() +
+			statusStyle.Render(" running…") + "\n\n")
 	case m.mode == modeSearch:
 		sb.WriteString(searchStyle.Render(" / "+m.search+"█") + "\n\n")
 	case m.mode == modeGrep:
-		caseLabel := "insensitive"
-		if m.grepCaseSensitive {
-			caseLabel = "sensitive"
-		}
-		sb.WriteString(grepStyle.Render(" grep all: "+m.search+"█") +
-			statusStyle.Render("  enter search • tab case:"+caseLabel+" • esc cancel") + "\n\n")
+		r := []rune(m.search)
+		before := string(r[:m.shellCursor])
+		after := string(r[m.shellCursor:])
+		sb.WriteString(grepStyle.Render(" shell: "+before+"█"+after) +
+			statusStyle.Render("  enter run • ctrl+←/→ word jump • esc cancel") + "\n\n")
 	default:
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep • V select+archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f shell • V select+archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 

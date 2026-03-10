@@ -73,7 +73,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case filelist.GrepStartMsg:
 		m.filelist, _ = m.filelist.Update(msg) // clears grepLoading spinner
-		m.viewer = viewer.NewVirtual("grep: "+msg.Pattern+" [searching…]", "", m.width, m.height)
+		m.viewer = viewer.NewVirtual("shell: "+msg.Pattern+" [running…]", "", m.width, m.height)
 		m.screen = screenViewer
 		return m, waitForChunk(msg.Ch, msg.Pattern)
 

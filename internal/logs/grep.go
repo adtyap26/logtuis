@@ -245,6 +245,30 @@ func grepFileGo(lf LogFile, re *regexp.Regexp) []string {
 	return matches
 }
 
+// ShellStream runs an arbitrary shell command via sh -c and streams the output.
+// The command runs in the process's current working directory, so glob patterns
+// like * expand against the files in that directory.
+func ShellStream(cmd string) <-chan GrepChunk {
+	ch := make(chan GrepChunk, 4)
+	go func() {
+		defer close(ch)
+		if cmd == "" {
+			return
+		}
+		c := exec.Command("sh", "-c", cmd)
+		out, err := c.Output()
+		if len(out) > 0 {
+			ch <- GrepChunk{Content: string(out)}
+		} else if err != nil {
+			if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+				ch <- GrepChunk{Content: string(ee.Stderr)}
+			}
+		}
+		ch <- GrepChunk{Done: true, Total: strings.Count(string(out), "\n")}
+	}()
+	return ch
+}
+
 // GrepChunk holds grep results from one file, used for streaming.
 // When Done is true, no more chunks will arrive and Total has the final count.
 type GrepChunk struct {
