@@ -248,7 +248,7 @@ func grepFileGo(lf LogFile, re *regexp.Regexp) []string {
 // ShellStream runs an arbitrary shell command via sh -c and streams the output.
 // The command runs in the process's current working directory, so glob patterns
 // like * expand against the files in that directory.
-func ShellStream(cmd string) <-chan GrepChunk {
+func ShellStream(dir, cmd string) <-chan GrepChunk {
 	ch := make(chan GrepChunk, 4)
 	go func() {
 		defer close(ch)
@@ -256,6 +256,7 @@ func ShellStream(cmd string) <-chan GrepChunk {
 			return
 		}
 		c := exec.Command("sh", "-c", cmd)
+		c.Dir = dir
 		out, err := c.Output()
 		if len(out) > 0 {
 			ch <- GrepChunk{Content: string(out)}

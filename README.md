@@ -2,6 +2,8 @@
 
 A lightweight, fast terminal log viewer. Single binary, no dependencies. Supports plain, rotated, and gzip-compressed log files.
 
+https://github.com/user-attachments/assets/4903a195-6a02-44a4-a058-7621469607f5
+
 ## Install
 
 **Download binary (recommended)**
@@ -42,19 +44,20 @@ logtuis /var/log/redis
 | `/`       | Fuzzy filter by filename      |
 | `esc`     | Clear search                  |
 | `enter`   | Open selected file            |
-| `ctrl+f`  | Grep pattern across all files |
-| `ctrl+r`  | Reload / rescan directory     |
-| `V`       | Enter select mode             |
-| `q`       | Quit                          |
+| `ctrl+f`  | Grep pattern across all files         |
+| `ctrl+s`  | Run shell pipeline across all files   |
+| `ctrl+r`  | Reload / rescan directory             |
+| `V`       | Enter select mode                     |
+| `q`       | Quit                                  |
 
 ### Select Mode (V)
 
-| Key     | Action                                      |
-| ------- | ------------------------------------------- |
-| `space` | Toggle selection on current file            |
-| `j`/`k` | Move cursor up/down                         |
-| `enter` | Archive selected files to `logtuis-<timestamp>.tar.gz` |
-| `esc`   | Cancel and clear selection                  |
+| Key     | Action                                                  |
+| ------- | ------------------------------------------------------- |
+| `space` | Toggle selection on current file                        |
+| `j`/`k` | Move cursor up/down                                     |
+| `enter` | Archive selected files to `logtuis-<timestamp>.tar.gz`  |
+| `esc`   | Cancel and clear selection                              |
 
 ### Global Grep (ctrl+f)
 
@@ -63,6 +66,18 @@ logtuis /var/log/redis
 | `tab`   | Toggle case-sensitive / insensitive |
 | `enter` | Run grep across all log files       |
 | `esc`   | Cancel                              |
+
+### Shell Runner (ctrl+s)
+
+| Key              | Action                        |
+| ---------------- | ----------------------------- |
+| `ctrl+←` / `→`  | Jump word left / right        |
+| `ctrl+a`         | Go to start of input          |
+| `ctrl+e`         | Go to end of input            |
+| `ctrl+k`         | Delete to end of line         |
+| `ctrl+w`         | Delete word before cursor     |
+| `enter`          | Run command                   |
+| `esc`            | Cancel                        |
 
 ### Log Viewer
 
@@ -84,6 +99,24 @@ logtuis /var/log/redis
 | `W`       | Toggle watch mode (auto-reload 2s)   |
 | `esc`     | Clear search / go back to file list  |
 | `q`       | Go back to file list                 |
+
+## Shell Pipeline (ctrl+s)
+
+Run any shell command against your log files. The command runs in the log directory so `*` expands to all files naturally.
+
+```bash
+# grep across all files
+grep -i "ERROR" *
+
+# time range filter + aggregate
+awk -v start=14:30:00 -v stop=22:00:00 'start <= $2 && $2 < stop' * | grep -i "requests" | awk '{print $4}' | sort | uniq -c | sort -nr
+
+# single file
+grep -i "ERROR" server.log
+
+# count errors per file
+grep -c "ERROR" *
+```
 
 ## Archive
 

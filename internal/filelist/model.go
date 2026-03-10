@@ -57,7 +57,8 @@ type inputMode int
 const (
 	modeNormal inputMode = iota
 	modeSearch
-	modeGrep
+	modeGrep  // ctrl+f — grep pattern across all files (handles gz)
+	modeShell // ctrl+s — arbitrary shell pipeline via sh -c
 )
 
 // archiveDoneMsg is sent when the tar.gz creation completes.
@@ -74,7 +75,8 @@ type Model struct {
 	cursor            int
 	search            string
 	mode              inputMode
-	shellCursor       int // cursor position in grep/shell input (rune index)
+	grepCaseSensitive bool
+	shellCursor       int // cursor position in shell input (rune index)
 	width             int
 	height            int
 	preview           string // cached preview of selected file
@@ -134,6 +136,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m.handleSearch(msg)
 		case modeGrep:
 			return m.handleGrepInput(msg)
+		case modeShell:
+			return m.handleShellInput(msg)
 		default:
 			return m.handleNav(msg)
 		}
@@ -185,6 +189,9 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.search = ""
 	case "ctrl+f":
 		m.mode = modeGrep
+		m.search = ""
+	case "ctrl+s":
+		m.mode = modeShell
 		m.search = ""
 		m.shellCursor = 0
 	case "esc":
@@ -254,6 +261,45 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Paste {
+		m.search += string(msg.Runes)
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.search = ""
+	case "tab":
+		m.grepCaseSensitive = !m.grepCaseSensitive
+	case "enter":
+		if m.search == "" {
+			m.mode = modeNormal
+			return m, nil
+		}
+		pattern := m.search
+		dir := m.dir
+		cs := m.grepCaseSensitive
+		m.mode = modeNormal
+		m.search = ""
+		m.grepLoading = true
+		ch := logs.GrepStream(dir, pattern, cs)
+		startCmd := func() tea.Msg {
+			return GrepStartMsg{Pattern: pattern, Ch: ch}
+		}
+		return m, tea.Batch(startCmd, m.spinner.Tick)
+	case "backspace", "ctrl+h":
+		if len(m.search) > 0 {
+			m.search = m.search[:len(m.search)-1]
+		}
+	default:
+		if len(msg.String()) == 1 {
+			m.search += msg.String()
+		}
+	}
+	return m, nil
+}
+
+func (m Model) handleShellInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 	r := []rune(m.search)
 	cur := m.shellCursor
 
@@ -276,11 +322,12 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		cmd := m.search
+		dir := m.dir
 		m.mode = modeNormal
 		m.search = ""
 		m.shellCursor = 0
 		m.grepLoading = true
-		ch := logs.ShellStream(cmd)
+		ch := logs.ShellStream(dir, cmd)
 		startCmd := func() tea.Msg {
 			return GrepStartMsg{Pattern: cmd, Ch: ch}
 		}
@@ -410,11 +457,17 @@ func (m Model) View() string {
 		sb.WriteString(checkedStyle.Render(fmt.Sprintf(" V select [%d selected]", len(m.selected))) +
 			statusStyle.Render("  space toggle • j/k move+mark • enter archive • esc cancel") + "\n\n")
 	case m.grepLoading:
-		sb.WriteString(grepStyle.Render(" shell: ") + m.spinner.View() +
-			statusStyle.Render(" running…") + "\n\n")
+		sb.WriteString(grepStyle.Render(" running: ") + m.spinner.View() + "\n\n")
 	case m.mode == modeSearch:
 		sb.WriteString(searchStyle.Render(" / "+m.search+"█") + "\n\n")
 	case m.mode == modeGrep:
+		caseLabel := "insensitive"
+		if m.grepCaseSensitive {
+			caseLabel = "sensitive"
+		}
+		sb.WriteString(grepStyle.Render(" grep all: "+m.search+"█") +
+			statusStyle.Render("  enter search • tab case:"+caseLabel+" • esc cancel") + "\n\n")
+	case m.mode == modeShell:
 		r := []rune(m.search)
 		before := string(r[:m.shellCursor])
 		after := string(r[m.shellCursor:])
@@ -424,7 +477,7 @@ func (m Model) View() string {
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f shell • V select+archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all • ctrl+s shell • V archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 
