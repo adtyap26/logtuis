@@ -48,6 +48,8 @@ var (
 	helpStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	previewHdrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
 	previewStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
+	checkedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
+	archiveStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 )
 
 type inputMode int
@@ -57,6 +59,12 @@ const (
 	modeSearch
 	modeGrep
 )
+
+// archiveDoneMsg is sent when the tar.gz creation completes.
+type archiveDoneMsg struct {
+	path string
+	err  error
+}
 
 // Model is the file list screen.
 type Model struct {
@@ -72,6 +80,10 @@ type Model struct {
 	preview           string // cached preview of selected file
 	grepLoading       bool
 	spinner           spinner.Model
+	selecting         bool
+	selected          map[int]bool // indices into m.filtered
+	archiving         bool
+	archiveMsg        string
 }
 
 func New(dir string, files []logs.LogFile) Model {
@@ -99,7 +111,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case spinner.TickMsg:
-		if m.grepLoading {
+		if m.grepLoading || m.archiving {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -107,6 +119,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case GrepStartMsg:
 		// viewer is about to open — clear the spinner
 		m.grepLoading = false
+	case archiveDoneMsg:
+		m.archiving = false
+		m.selecting = false
+		m.selected = nil
+		if msg.err != nil {
+			m.archiveMsg = "archive failed: " + msg.err.Error()
+		} else {
+			m.archiveMsg = "saved → " + msg.path
+		}
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeSearch:
@@ -121,6 +142,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// clear transient archive message on any key
+	m.archiveMsg = ""
+
 	switch msg.String() {
 	case "j", "down":
 		if m.cursor < len(m.filtered)-1 {
@@ -140,6 +164,22 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 			m.updatePreview()
 		}
+	case "V":
+		if m.selecting {
+			m.selecting = false
+			m.selected = nil
+		} else {
+			m.selecting = true
+			m.selected = make(map[int]bool)
+		}
+	case " ":
+		if m.selecting {
+			if m.selected[m.cursor] {
+				delete(m.selected, m.cursor)
+			} else {
+				m.selected[m.cursor] = true
+			}
+		}
 	case "/":
 		m.mode = modeSearch
 		m.search = ""
@@ -147,11 +187,26 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.mode = modeGrep
 		m.search = ""
 	case "esc":
+		if m.selecting {
+			m.selecting = false
+			m.selected = nil
+			return m, nil
+		}
 		m.search = ""
 		m.mode = modeNormal
 		m.applyFilter()
 	case "enter":
-		if len(m.filtered) > 0 {
+		if m.selecting && len(m.selected) > 0 {
+			var toArchive []logs.LogFile
+			for idx := range m.selected {
+				if idx < len(m.filtered) {
+					toArchive = append(toArchive, m.filtered[idx])
+				}
+			}
+			m.archiving = true
+			return m, tea.Batch(makeArchiveCmd(toArchive), m.spinner.Tick)
+		}
+		if !m.selecting && len(m.filtered) > 0 {
 			file := m.filtered[m.cursor]
 			return m, func() tea.Msg {
 				return OpenFileMsg{File: file}
@@ -159,6 +214,15 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func makeArchiveCmd(files []logs.LogFile) tea.Cmd {
+	return func() tea.Msg {
+		ts := time.Now().Format("20060102-150405")
+		dest := fmt.Sprintf("logtuis-%s.tar.gz", ts)
+		err := logs.Archive(files, dest)
+		return archiveDoneMsg{path: dest, err: err}
+	}
 }
 
 func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -273,6 +337,14 @@ func (m Model) View() string {
 
 	// input bar
 	switch {
+	case m.archiving:
+		sb.WriteString(archiveStyle.Render(" archiving: ") + m.spinner.View() +
+			statusStyle.Render(" creating tar.gz…") + "\n\n")
+	case m.archiveMsg != "":
+		sb.WriteString(archiveStyle.Render("  "+m.archiveMsg) + "\n\n")
+	case m.selecting:
+		sb.WriteString(checkedStyle.Render(fmt.Sprintf(" V select [%d selected]", len(m.selected))) +
+			statusStyle.Render("  space toggle • j/k move+mark • enter archive • esc cancel") + "\n\n")
 	case m.grepLoading:
 		sb.WriteString(grepStyle.Render(" grep all: ") + m.spinner.View() +
 			statusStyle.Render(" searching…") + "\n\n")
@@ -289,7 +361,7 @@ func (m Model) View() string {
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep • V select+archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 
@@ -345,10 +417,15 @@ func (m Model) View() string {
 				f.Mode.String(), humanSize(f.Size), ownerPad, formatDate(f.ModTime)))
 		}
 
+		check := "  "
+		if m.selecting && m.selected[i] {
+			check = checkedStyle.Render("✓ ")
+		}
+
 		if i == m.cursor {
-			sb.WriteString(selectedStyle.Render(" > ") + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString(selectedStyle.Render(" > ") + check + nameStyle.Render(namePad) + meta + "\n")
 		} else {
-			sb.WriteString("   " + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString("   " + check + nameStyle.Render(namePad) + meta + "\n")
 		}
 	}
 
