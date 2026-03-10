@@ -44,7 +44,17 @@ logtuis /var/log/redis
 | `enter`   | Open selected file            |
 | `ctrl+f`  | Grep pattern across all files |
 | `ctrl+r`  | Reload / rescan directory     |
+| `V`       | Enter select mode             |
 | `q`       | Quit                          |
+
+### Select Mode (V)
+
+| Key     | Action                                      |
+| ------- | ------------------------------------------- |
+| `space` | Toggle selection on current file            |
+| `j`/`k` | Move cursor up/down                         |
+| `enter` | Archive selected files to `logtuis-<timestamp>.tar.gz` |
+| `esc`   | Cancel and clear selection                  |
 
 ### Global Grep (ctrl+f)
 
@@ -74,6 +84,14 @@ logtuis /var/log/redis
 | `W`       | Toggle watch mode (auto-reload 2s)   |
 | `esc`     | Clear search / go back to file list  |
 | `q`       | Go back to file list                 |
+
+## Archive
+
+- Press `V` to enter select mode
+- Navigate with `j`/`k` and press `space` to toggle each file
+- Press `enter` to create a `logtuis-<timestamp>.tar.gz` in the current directory
+- `.gz` files are included as-is (no double compression)
+- Press `esc` to cancel without archiving
 
 ## Search
 
