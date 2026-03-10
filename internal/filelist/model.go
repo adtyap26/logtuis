@@ -50,6 +50,7 @@ var (
 	previewStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
 	checkedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	archiveStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
+	sshTagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan for remote source tag
 )
 
 type inputMode int
@@ -277,12 +278,11 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		pattern := m.search
-		dir := m.dir
 		cs := m.grepCaseSensitive
 		m.mode = modeNormal
 		m.search = ""
 		m.grepLoading = true
-		ch := logs.GrepStream(dir, pattern, cs)
+		ch := logs.GrepStreamFiles(m.all, pattern, cs)
 		startCmd := func() tea.Msg {
 			return GrepStartMsg{Pattern: pattern, Ch: ch}
 		}
@@ -327,7 +327,7 @@ func (m Model) handleShellInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.search = ""
 		m.shellCursor = 0
 		m.grepLoading = true
-		ch := logs.ShellStream(dir, cmd)
+		ch := logs.ShellStreamAll(dir, logs.UniqueSSHSources(m.all), cmd)
 		startCmd := func() tea.Msg {
 			return GrepStartMsg{Pattern: cmd, Ch: ch}
 		}
@@ -525,12 +525,25 @@ func (m Model) View() string {
 			nameStyle = gzStyle
 		}
 
-		namePad := fmt.Sprintf("%-*s", maxName, f.Name)
+		// Build display name: prepend [source] tag for SSH files.
+		displayName := f.Name
+		if f.SSH != nil {
+			label := f.SSH.Name
+			if label == "" {
+				label = f.SSH.Host
+			}
+			displayName = sshTagStyle.Render("["+label+"] ") + nameStyle.Render(f.Name)
+		}
+		namePad := fmt.Sprintf("%-*s", maxName, f.Name) // used for width alignment only
+		_ = namePad
+
 		meta := ""
 		if !f.ModTime.IsZero() {
 			ownerPad := fmt.Sprintf("%-*s", maxOwner, f.Owner)
 			meta = metaStyle.Render(fmt.Sprintf("  %s  %5s  %s  %s",
 				f.Mode.String(), humanSize(f.Size), ownerPad, formatDate(f.ModTime)))
+		} else if f.SSH != nil && f.Size > 0 {
+			meta = metaStyle.Render(fmt.Sprintf("  %5s  %s", humanSize(f.Size), f.Owner))
 		}
 
 		check := "  "
@@ -539,9 +552,9 @@ func (m Model) View() string {
 		}
 
 		if i == m.cursor {
-			sb.WriteString(selectedStyle.Render(" > ") + check + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString(selectedStyle.Render(" > ") + check + displayName + meta + "\n")
 		} else {
-			sb.WriteString("   " + check + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString("   " + check + displayName + meta + "\n")
 		}
 	}
 

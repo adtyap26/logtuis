@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/permaditya/log-manager/internal/config"
 	"github.com/permaditya/log-manager/internal/filelist"
 	"github.com/permaditya/log-manager/internal/logs"
+	"github.com/permaditya/log-manager/internal/sourcepicker"
 	"github.com/permaditya/log-manager/internal/viewer"
 )
 
@@ -27,37 +29,76 @@ func waitForChunk(ch <-chan logs.GrepChunk, pattern string) tea.Cmd {
 type screen int
 
 const (
-	screenList screen = iota
+	screenSourcePicker screen = iota
+	screenList
 	screenViewer
 )
 
 // Model is the root application model.
 type Model struct {
-	dir      string
-	screen   screen
-	filelist filelist.Model
-	viewer   viewer.Model
-	width    int
-	height   int
-	err      string
+	dir             string
+	screen          screen
+	sourcePicker    sourcepicker.Model
+	filelist        filelist.Model
+	viewer          viewer.Model
+	selectedSources []sourcepicker.Source // stored for ctrl+r re-scan
+	width           int
+	height          int
+	err             string
 }
 
 func New(dir string) Model {
-	files, err := logs.Scan(dir)
+	cfg, cfgErr := config.Load()
 	errMsg := ""
-	if err != nil {
-		errMsg = fmt.Sprintf("scan error: %v", err)
+	if cfgErr != nil {
+		errMsg = fmt.Sprintf("config error: %v", cfgErr)
 	}
+
+	var sshCfgs []logs.SSHConfig
+	for _, s := range cfg.SSHSources {
+		sshCfgs = append(sshCfgs, logs.SSHConfig{
+			Name:     s.Name,
+			Host:     s.Host,
+			Port:     s.Port,
+			User:     s.User,
+			Identity: s.Identity,
+			Password: s.Password,
+			Path:     s.Path,
+		})
+	}
+
 	return Model{
-		dir:      dir,
-		screen:   screenList,
-		filelist: filelist.New(dir, files),
-		err:      errMsg,
+		dir:          dir,
+		screen:       screenSourcePicker,
+		sourcePicker: sourcepicker.New(dir, sshCfgs),
+		err:          errMsg,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	return nil
+}
+
+// scanSources scans all selected sources and returns the combined file list.
+func scanSources(sources []sourcepicker.Source) []logs.LogFile {
+	var files []logs.LogFile
+	for _, src := range sources {
+		if src.IsLocal {
+			local, _ := logs.Scan(src.Dir)
+			files = append(files, local...)
+		} else if src.SSH != nil {
+			remote, err := logs.ScanSSH(*src.SSH)
+			if err != nil {
+				files = append(files, logs.LogFile{
+					Name: fmt.Sprintf("[%s] (connect error: %v)", src.Label, err),
+					SSH:  src.SSH,
+				})
+			} else {
+				files = append(files, remote...)
+			}
+		}
+	}
+	return files
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -66,13 +107,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+	case sourcepicker.ConfirmMsg:
+		files := scanSources(msg.Sources)
+		m.selectedSources = msg.Sources
+		m.filelist = filelist.New(m.dir, files)
+		m.filelist, _ = m.filelist.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+		m.screen = screenList
+		return m, nil
+
 	case filelist.OpenFileMsg:
 		m.viewer = viewer.New(msg.File, m.width, m.height)
 		m.screen = screenViewer
 		return m, nil
 
 	case filelist.GrepStartMsg:
-		m.filelist, _ = m.filelist.Update(msg) // clears grepLoading spinner
+		m.filelist, _ = m.filelist.Update(msg)
 		m.viewer = viewer.NewVirtual("shell: "+msg.Pattern+" [running…]", "", m.width, m.height)
 		m.screen = screenViewer
 		return m, waitForChunk(msg.Ch, msg.Pattern)
@@ -82,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewer.Append(msg.Content)
 			return m, waitForChunk(msg.Ch, msg.Pattern)
 		}
-		return m, nil // user went back — let channel drain naturally
+		return m, nil
 
 	case filelist.GrepDoneMsg:
 		if m.screen == screenViewer {
@@ -100,25 +149,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.screen == screenList {
+		switch m.screen {
+		case screenSourcePicker:
+			if msg.String() == "q" {
+				return m, tea.Quit
+			}
+		case screenList:
 			switch msg.String() {
 			case "q":
 				return m, tea.Quit
 			case "ctrl+r":
-				files, err := logs.Scan(m.dir)
-				if err != nil {
-					m.err = fmt.Sprintf("scan error: %v", err)
-				} else {
-					m.err = ""
-					m.filelist = filelist.New(m.dir, files)
-					m.filelist, _ = m.filelist.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
-				}
+				// Go back to source picker to re-select sources.
+				m.screen = screenSourcePicker
 				return m, nil
 			}
 		}
 	}
 
 	switch m.screen {
+	case screenSourcePicker:
+		var cmd tea.Cmd
+		m.sourcePicker, cmd = m.sourcePicker.Update(msg)
+		return m, cmd
 	case screenList:
 		var cmd tea.Cmd
 		m.filelist, cmd = m.filelist.Update(msg)
@@ -137,6 +189,8 @@ func (m Model) View() string {
 		return "error: " + m.err + "\n"
 	}
 	switch m.screen {
+	case screenSourcePicker:
+		return m.sourcePicker.View()
 	case screenList:
 		return m.filelist.View()
 	case screenViewer:

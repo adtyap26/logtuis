@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -9,9 +10,22 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/permaditya/log-manager/internal/sshclient"
 )
 
-// LogFile represents a discovered log file.
+// SSHConfig holds the connection details for a remote log source.
+type SSHConfig struct {
+	Name     string
+	Host     string
+	Port     int
+	User     string
+	Identity string
+	Password string
+	Path     string // remote directory path
+}
+
+// LogFile represents a discovered log file (local or remote).
 type LogFile struct {
 	Path       string
 	Name       string
@@ -20,6 +34,7 @@ type LogFile struct {
 	Mode       os.FileMode
 	ModTime    time.Time
 	Owner      string
+	SSH        *SSHConfig // nil for local files
 }
 
 // plainSuffixes matches files ending with these exact suffixes.
@@ -111,4 +126,46 @@ func isRotatedLog(name string) bool {
 		}
 	}
 	return true
+}
+
+// ScanSSH lists log files on a remote server under the given path via SSH.
+// It runs `ls -la <path>` on the remote host and parses the filenames.
+func ScanSSH(cfg SSHConfig) ([]LogFile, error) {
+	// Use `|| true` so ls always exits 0 — a missing/empty path returns empty output, not an error.
+	out, err := sshclient.Default.RunCommand(cfg.User, cfg.Host, cfg.Port, cfg.Identity, cfg.Password,
+		fmt.Sprintf("ls -la %s 2>/dev/null || true", cfg.Path))
+	if err != nil {
+		return nil, fmt.Errorf("ssh ls %s@%s:%s: %w", cfg.User, cfg.Host, cfg.Path, err)
+	}
+
+	var files []LogFile
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		// ls -la output: permissions links owner group size month day time name
+		if len(fields) < 9 {
+			continue
+		}
+		name := fields[len(fields)-1]
+		if name == "." || name == ".." {
+			continue
+		}
+		match, compressed := classify(name)
+		if !match {
+			continue
+		}
+
+		size, _ := strconv.ParseInt(fields[4], 10, 64)
+		owner := fields[2]
+
+		lf := LogFile{
+			Path:       cfg.Path + "/" + name,
+			Name:       name,
+			Compressed: compressed,
+			Size:       size,
+			Owner:      owner,
+			SSH:        &cfg,
+		}
+		files = append(files, lf)
+	}
+	return files, nil
 }
