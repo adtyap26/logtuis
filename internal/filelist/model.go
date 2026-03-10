@@ -3,6 +3,7 @@ package filelist
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -242,6 +243,29 @@ func (m *Model) updatePreview() {
 	m.preview = logs.ReadPreview(m.filtered[m.cursor], previewLines)
 }
 
+func humanSize(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1fG", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fM", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1fK", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
+}
+
+func formatDate(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	if time.Since(t) > 180*24*time.Hour {
+		return t.Format("_2 Jan 2006")
+	}
+	return t.Format("_2 Jan 15:04")
+}
+
 func (m Model) View() string {
 	var sb strings.Builder
 
@@ -294,16 +318,37 @@ func (m Model) View() string {
 		}
 	}
 
+	// Compute column widths from visible files for alignment.
+	maxName, maxOwner := 0, 0
+	for _, f := range m.filtered {
+		if len(f.Name) > maxName {
+			maxName = len(f.Name)
+		}
+		if len(f.Owner) > maxOwner {
+			maxOwner = len(f.Owner)
+		}
+	}
+
+	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	for i := start; i < end; i++ {
 		f := m.filtered[i]
 		nameStyle := normalStyle
 		if f.Compressed {
 			nameStyle = gzStyle
 		}
+
+		namePad := fmt.Sprintf("%-*s", maxName, f.Name)
+		meta := ""
+		if !f.ModTime.IsZero() {
+			ownerPad := fmt.Sprintf("%-*s", maxOwner, f.Owner)
+			meta = metaStyle.Render(fmt.Sprintf("  %s  %5s  %s  %s",
+				f.Mode.String(), humanSize(f.Size), ownerPad, formatDate(f.ModTime)))
+		}
+
 		if i == m.cursor {
-			sb.WriteString(selectedStyle.Render(" > ") + nameStyle.Render(f.Name) + "\n")
+			sb.WriteString(selectedStyle.Render(" > ") + nameStyle.Render(namePad) + meta + "\n")
 		} else {
-			sb.WriteString("   " + nameStyle.Render(f.Name) + "\n")
+			sb.WriteString("   " + nameStyle.Render(namePad) + meta + "\n")
 		}
 	}
 

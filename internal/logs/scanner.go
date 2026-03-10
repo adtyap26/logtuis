@@ -2,8 +2,12 @@ package logs
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
 )
 
@@ -12,6 +16,10 @@ type LogFile struct {
 	Path       string
 	Name       string
 	Compressed bool
+	Size       int64
+	Mode       os.FileMode
+	ModTime    time.Time
+	Owner      string
 }
 
 // plainSuffixes matches files ending with these exact suffixes.
@@ -37,11 +45,18 @@ func Scan(dir string) ([]LogFile, error) {
 		}
 		name := e.Name()
 		if match, compressed := classify(name); match {
-			files = append(files, LogFile{
+			lf := LogFile{
 				Path:       filepath.Join(dir, name),
 				Name:       name,
 				Compressed: compressed,
-			})
+			}
+			if info, err := e.Info(); err == nil {
+				lf.Size = info.Size()
+				lf.Mode = info.Mode()
+				lf.ModTime = info.ModTime()
+				lf.Owner = fileOwner(info)
+			}
+			files = append(files, lf)
 		}
 	}
 
@@ -68,6 +83,16 @@ func classify(name string) (bool, bool) {
 	}
 
 	return false, false
+}
+
+// fileOwner returns the username of the file owner, or empty string if unavailable.
+func fileOwner(info os.FileInfo) string {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		if u, err := user.LookupId(strconv.Itoa(int(stat.Uid))); err == nil {
+			return u.Username
+		}
+	}
+	return ""
 }
 
 // isRotatedLog matches files like server.log.2, app.log.10
