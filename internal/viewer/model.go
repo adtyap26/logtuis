@@ -35,6 +35,10 @@ var (
 	matchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("3")).Foreground(lipgloss.Color("0"))
 	currentMatch = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
 	savedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
+
+	lvlErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
+	lvlWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
+	lvlInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
 )
 
 // Model is the log viewer screen.
@@ -54,6 +58,7 @@ type Model struct {
 	filterMode    bool // show only matching lines
 	savedMsg      string
 	showLineNums  bool // toggle line numbers
+	showLogLevel  bool // toggle log level colorizing
 	jumping       bool // jump-to-line mode
 	jumpInput     string
 	watching      bool // watch mode — auto-reload every 2s
@@ -234,6 +239,11 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.refreshView()
 		return m, nil
 
+	case "c":
+		m.showLogLevel = !m.showLogLevel
+		m.refreshView()
+		return m, nil
+
 	case "W":
 		if m.virtual {
 			return m, nil // watch not available for grep results
@@ -393,6 +403,9 @@ func (m *Model) refreshView() {
 	highlighted := make([]string, len(m.lines))
 	for i, line := range m.lines {
 		rendered := line
+		if m.showLogLevel {
+			rendered = colorizeLevel(rendered)
+		}
 		if m.pattern != "" && m.lineMatches(line) {
 			rendered = highlightAll(line, pats, m.caseSensitive)
 		}
@@ -402,6 +415,65 @@ func (m *Model) refreshView() {
 	if len(m.matches) > 0 {
 		m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
 	}
+}
+
+// colorizeLevel highlights exact uppercase level keywords inline,
+// leaving the rest of the line uncolored.
+// Matches only whole tokens: the character before and after must not be a word char (letter/digit/_).
+func colorizeLevel(line string) string {
+	type kw struct {
+		word  string
+		style lipgloss.Style
+	}
+	keywords := []kw{
+		{"ERROR", lvlErrorStyle},
+		{"ERR", lvlErrorStyle},
+		{"WARN", lvlWarnStyle},
+		{"WRN", lvlWarnStyle},
+		{"INFO", lvlInfoStyle},
+		{"INF", lvlInfoStyle},
+	}
+	result := line
+	for _, k := range keywords {
+		result = colorizeKeyword(result, k.word, k.style)
+	}
+	return result
+}
+
+// isWordChar returns true for letters, digits, and underscore.
+func isWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// colorizeKeyword replaces whole-token occurrences of word in line with a styled version.
+// A token boundary means the adjacent character (if any) is not a word character.
+func colorizeKeyword(line, word string, style lipgloss.Style) string {
+	if !strings.Contains(line, word) {
+		return line
+	}
+	var sb strings.Builder
+	remaining := line
+	for {
+		idx := strings.Index(remaining, word)
+		if idx < 0 {
+			sb.WriteString(remaining)
+			break
+		}
+		end := idx + len(word)
+		// Check boundaries: char before and after must not be a word char.
+		before := idx == 0 || !isWordChar(remaining[idx-1])
+		after := end == len(remaining) || !isWordChar(remaining[end])
+		if before && after {
+			sb.WriteString(remaining[:idx])
+			sb.WriteString(style.Render(word))
+			remaining = remaining[end:]
+		} else {
+			// Not a clean boundary — skip past this occurrence.
+			sb.WriteString(remaining[:end])
+			remaining = remaining[end:]
+		}
+	}
+	return sb.String()
 }
 
 var lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -586,8 +658,12 @@ func (m Model) View() string {
 				watchHint = footerStyle.Render("  W watch")
 			}
 		}
+		colorHint := "off"
+		if m.showLogLevel {
+			colorHint = "on"
+		}
 		sb.WriteString(footerStyle.Render(
-			fmt.Sprintf("  q back • / search • : jump • L line-nums:%s • g/G top/bottom  %d%%", lineNumHint, pct),
+			fmt.Sprintf("  q back • / search • : jump • L line-nums:%s • c color:%s • g/G top/bottom  %d%%", lineNumHint, colorHint, pct),
 		) + watchHint)
 	}
 
