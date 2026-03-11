@@ -156,6 +156,8 @@ func ScanSSH(cfg SSHConfig) ([]LogFile, error) {
 
 		size, _ := strconv.ParseInt(fields[4], 10, 64)
 		owner := fields[2]
+		mode := parseModeString(fields[0])
+		modTime := parseLsDate(fields[5], fields[6], fields[7])
 
 		lf := LogFile{
 			Path:       cfg.Path + "/" + name,
@@ -163,9 +165,66 @@ func ScanSSH(cfg SSHConfig) ([]LogFile, error) {
 			Compressed: compressed,
 			Size:       size,
 			Owner:      owner,
+			Mode:       mode,
+			ModTime:    modTime,
 			SSH:        &cfg,
 		}
 		files = append(files, lf)
 	}
 	return files, nil
+}
+
+// parseModeString converts a ls -la permission string (e.g. "-rw-r--r--") to os.FileMode.
+func parseModeString(s string) os.FileMode {
+	if len(s) < 10 {
+		return 0
+	}
+	var m os.FileMode
+	if s[1] == 'r' {
+		m |= 0400
+	}
+	if s[2] == 'w' {
+		m |= 0200
+	}
+	if s[3] == 'x' || s[3] == 's' {
+		m |= 0100
+	}
+	if s[4] == 'r' {
+		m |= 0040
+	}
+	if s[5] == 'w' {
+		m |= 0020
+	}
+	if s[6] == 'x' || s[6] == 's' {
+		m |= 0010
+	}
+	if s[7] == 'r' {
+		m |= 0004
+	}
+	if s[8] == 'w' {
+		m |= 0002
+	}
+	if s[9] == 'x' || s[9] == 't' {
+		m |= 0001
+	}
+	return m
+}
+
+// parseLsDate parses the date fields from ls -la output.
+// Handles both "Mar  9 05:50" (current year) and "Mar  9  2024" (past year) formats.
+func parseLsDate(month, day, timeOrYear string) time.Time {
+	// If timeOrYear contains ":", it's a time (HH:MM) — use current year.
+	if strings.Contains(timeOrYear, ":") {
+		t, err := time.Parse("Jan 2 15:04 2006",
+			fmt.Sprintf("%s %s %s %d", month, day, timeOrYear, time.Now().Year()))
+		if err == nil {
+			return t
+		}
+	}
+	// Otherwise it's a year.
+	t, err := time.Parse("Jan 2 2006", fmt.Sprintf("%s %s %s", month, day, timeOrYear))
+	if err == nil {
+		return t
+	}
+	return time.Time{}
 }

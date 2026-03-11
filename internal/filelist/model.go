@@ -87,6 +87,7 @@ type Model struct {
 	selected          map[int]bool // indices into m.filtered
 	archiving         bool
 	archiveMsg        string
+	showLineNums      bool
 }
 
 func New(dir string, files []logs.LogFile) Model {
@@ -169,6 +170,8 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 			m.updatePreview()
 		}
+	case "L":
+		m.showLineNums = !m.showLineNums
 	case "V":
 		if m.selecting {
 			m.selecting = false
@@ -477,7 +480,7 @@ func (m Model) View() string {
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all • ctrl+s shell • V archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep • ctrl+s shell • V archive • L line nums • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 
@@ -486,12 +489,9 @@ func (m Model) View() string {
 		return sb.String()
 	}
 
-	// Base: title(2) + input(2) + blank+sep(2) + status(1) + prevhdr(1) + 2 wrap-buffer = 10.
-	// Add previewLines only when preview is actually shown — gives more list space when no preview.
-	reserved := 10
-	if m.preview != "" {
-		reserved += previewLines
-	}
+	// title(2) + input(2) + blank+sep(2) + status(1) + prevhdr(1) + previewLines + 2 wrap-buffer.
+	// Always reserve preview space so layout stays stable when navigating empty/non-empty files.
+	reserved := 10 + previewLines
 	listH := m.height - reserved
 	if listH < 3 {
 		listH = 3
@@ -522,11 +522,18 @@ func (m Model) View() string {
 	}
 
 	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	lineNumWidth := len(fmt.Sprintf("%d", len(m.filtered)))
 	for i := start; i < end; i++ {
 		f := m.filtered[i]
 		nameStyle := normalStyle
 		if f.Compressed {
 			nameStyle = gzStyle
+		}
+
+		// Line number prefix (1-based, right-aligned).
+		lineNum := ""
+		if m.showLineNums {
+			lineNum = statusStyle.Render(fmt.Sprintf("%*d ", lineNumWidth, i+1))
 		}
 
 		// Build display name: prepend [source] tag for SSH files.
@@ -537,17 +544,15 @@ func (m Model) View() string {
 				label = f.SSH.Host
 			}
 			displayName = sshTagStyle.Render("["+label+"] ") + nameStyle.Render(f.Name)
+		} else {
+			displayName = nameStyle.Render(f.Name)
 		}
-		namePad := fmt.Sprintf("%-*s", maxName, f.Name) // used for width alignment only
-		_ = namePad
 
 		meta := ""
 		if !f.ModTime.IsZero() {
 			ownerPad := fmt.Sprintf("%-*s", maxOwner, f.Owner)
 			meta = metaStyle.Render(fmt.Sprintf("  %s  %5s  %s  %s",
 				f.Mode.String(), humanSize(f.Size), ownerPad, formatDate(f.ModTime)))
-		} else if f.SSH != nil && f.Size > 0 {
-			meta = metaStyle.Render(fmt.Sprintf("  %5s  %s", humanSize(f.Size), f.Owner))
 		}
 
 		check := "  "
@@ -556,9 +561,9 @@ func (m Model) View() string {
 		}
 
 		if i == m.cursor {
-			sb.WriteString(selectedStyle.Render(" > ") + check + displayName + meta + "\n")
+			sb.WriteString(selectedStyle.Render(" > ") + check + lineNum + displayName + meta + "\n")
 		} else {
-			sb.WriteString("   " + check + displayName + meta + "\n")
+			sb.WriteString("   " + check + lineNum + displayName + meta + "\n")
 		}
 	}
 
@@ -568,16 +573,26 @@ func (m Model) View() string {
 	sb.WriteString("\n" + statusStyle.Render(sep) + "\n")
 	sb.WriteString(statusStyle.Render(fmt.Sprintf("  %d/%d files", len(m.filtered), len(m.all))) + "\n")
 
-	// preview pane
-	if m.preview != "" {
+	// preview pane — always rendered to keep layout stable
+	if len(m.filtered) > 0 {
 		selected := m.filtered[m.cursor]
 		sb.WriteString(previewHdrStyle.Render(" Log Preview: "+selected.Name) + "\n")
-		for _, line := range strings.Split(m.preview, "\n") {
-			// truncate long lines to terminal width
-			if m.width > 4 && len(line) > m.width-4 {
-				line = line[:m.width-4] + "…"
+		lines := strings.Split(m.preview, "\n")
+		if m.preview == "" {
+			lines = nil
+		}
+		for i := 0; i < previewLines; i++ {
+			if i < len(lines) {
+				line := lines[i]
+				if m.width > 4 && len(line) > m.width-4 {
+					line = line[:m.width-4] + "…"
+				}
+				sb.WriteString(previewStyle.Render("  "+line) + "\n")
+			} else if i == 0 && m.preview == "" {
+				sb.WriteString(statusStyle.Render("  (no content)") + "\n")
+			} else {
+				sb.WriteString("\n")
 			}
-			sb.WriteString(previewStyle.Render("  "+line) + "\n")
 		}
 	}
 
