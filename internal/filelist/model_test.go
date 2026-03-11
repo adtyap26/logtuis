@@ -21,7 +21,7 @@ func makeFiles(names ...string) []logs.LogFile {
 
 func TestNew(t *testing.T) {
 	files := makeFiles("app.log", "redis.log.1.gz")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 	if len(m.all) != 2 {
 		t.Errorf("expected 2 files, got %d", len(m.all))
 	}
@@ -32,7 +32,7 @@ func TestNew(t *testing.T) {
 
 func TestNavigation(t *testing.T) {
 	files := makeFiles("a.log", "b.log", "c.log")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.cursor != 1 {
@@ -62,7 +62,7 @@ func TestNavigation(t *testing.T) {
 
 func TestFuzzySearch(t *testing.T) {
 	files := makeFiles("app.log", "redis.log", "nginx.log", "redis.log.1.gz")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	if m.mode != modeSearch {
@@ -87,7 +87,7 @@ func TestFuzzySearch(t *testing.T) {
 
 func TestGrepMode(t *testing.T) {
 	files := makeFiles("app.log")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if m.mode != modeGrep {
@@ -113,7 +113,7 @@ func TestGrepMode(t *testing.T) {
 
 func TestGrepModeEmit(t *testing.T) {
 	files := makeFiles("app.log")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
 	for _, ch := range "ERROR" {
@@ -152,7 +152,7 @@ func TestGrepModeEmit(t *testing.T) {
 
 func TestOpenFile(t *testing.T) {
 	files := makeFiles("app.log")
-	m := New("/tmp", files)
+	m := New("/tmp", files, nil)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -169,7 +169,7 @@ func TestOpenFile(t *testing.T) {
 }
 
 func TestOpenFileEmpty(t *testing.T) {
-	m := New("/tmp", nil)
+	m := New("/tmp", nil, nil)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
 		t.Error("expected no command when no files")
