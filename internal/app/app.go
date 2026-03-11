@@ -79,15 +79,20 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// scanSources scans all selected sources and returns the combined file list.
-func scanSources(sources []sourcepicker.Source) []logs.LogFile {
+// scanSources scans all selected sources and returns the combined file list and SSH statuses.
+func scanSources(sources []sourcepicker.Source) ([]logs.LogFile, []filelist.SSHStatus) {
 	var files []logs.LogFile
+	var statuses []filelist.SSHStatus
 	for _, src := range sources {
 		if src.IsLocal {
 			local, _ := logs.Scan(src.Dir)
 			files = append(files, local...)
 		} else if src.SSH != nil {
 			remote, err := logs.ScanSSH(*src.SSH)
+			statuses = append(statuses, filelist.SSHStatus{
+				Name:      src.Label,
+				Connected: err == nil,
+			})
 			if err != nil {
 				files = append(files, logs.LogFile{
 					Name: fmt.Sprintf("[%s] (connect error: %v)", src.Label, err),
@@ -98,7 +103,7 @@ func scanSources(sources []sourcepicker.Source) []logs.LogFile {
 			}
 		}
 	}
-	return files
+	return files, statuses
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -108,9 +113,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case sourcepicker.ConfirmMsg:
-		files := scanSources(msg.Sources)
+		files, statuses := scanSources(msg.Sources)
 		m.selectedSources = msg.Sources
-		m.filelist = filelist.New(m.dir, files)
+		m.filelist = filelist.New(m.dir, files, statuses)
 		m.filelist, _ = m.filelist.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 		m.screen = screenList
 		return m, nil

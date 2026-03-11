@@ -37,6 +37,12 @@ type GrepDoneMsg struct {
 
 const previewLines = 15
 
+// SSHStatus holds the name and connection state of an SSH source.
+type SSHStatus struct {
+	Name      string
+	Connected bool
+}
+
 var (
 	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
 	selectedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
@@ -51,6 +57,8 @@ var (
 	checkedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	archiveStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	sshTagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan for remote source tag
+	connectedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	failedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 )
 
 type inputMode int
@@ -88,18 +96,20 @@ type Model struct {
 	archiving         bool
 	archiveMsg        string
 	showLineNums      bool
+	sshStatus         []SSHStatus
 }
 
-func New(dir string, files []logs.LogFile) Model {
+func New(dir string, files []logs.LogFile, sshStatus []SSHStatus) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 
 	m := Model{
-		dir:      dir,
-		all:      files,
-		filtered: files,
-		spinner:  sp,
+		dir:       dir,
+		all:       files,
+		filtered:  files,
+		spinner:   sp,
+		sshStatus: sshStatus,
 	}
 	m.updatePreview()
 	return m
@@ -447,7 +457,21 @@ func formatDate(t time.Time) string {
 func (m Model) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n\n")
+	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n")
+
+	// SSH connection status bar
+	if len(m.sshStatus) > 0 {
+		var parts []string
+		for _, s := range m.sshStatus {
+			if s.Connected {
+				parts = append(parts, connectedStyle.Render("● "+s.Name))
+			} else {
+				parts = append(parts, failedStyle.Render("● "+s.Name))
+			}
+		}
+		sb.WriteString("  " + strings.Join(parts, "   ") + "\n")
+	}
+	sb.WriteString("\n")
 
 	// input bar
 	switch {
@@ -492,6 +516,9 @@ func (m Model) View() string {
 	// title(2) + input(2) + blank+sep(2) + status(1) + prevhdr(1) + previewLines + 2 wrap-buffer.
 	// Always reserve preview space so layout stays stable when navigating empty/non-empty files.
 	reserved := 10 + previewLines
+	if len(m.sshStatus) > 0 {
+		reserved++
+	}
 	listH := m.height - reserved
 	if listH < 3 {
 		listH = 3
