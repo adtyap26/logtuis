@@ -39,6 +39,8 @@ var (
 	lvlErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 	lvlWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
 	lvlInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+
+	cursorCharStyle = lipgloss.NewStyle().Reverse(true).Bold(true) // block cursor character
 )
 
 // Model is the log viewer screen.
@@ -63,6 +65,8 @@ type Model struct {
 	jumpInput     string
 	watching      bool // watch mode — auto-reload every 2s
 	virtual       bool // true for in-memory content (grep results), no watch
+	yOffset       int  // vertical scroll offset managed by us (not viewport)
+	cursor        int  // absolute line index of the highlighted cursor line
 }
 
 func New(file logs.LogFile, width, height int) Model {
@@ -109,10 +113,14 @@ func (m *Model) Append(content string) {
 	}
 	content = strings.TrimRight(content, "\n")
 	newLines := strings.Split(content, "\n")
-	savedOffset := m.viewport.YOffset
+	atBottom := m.yOffset >= m.sourceLen()-m.viewport.Height
 	m.lines = append(m.lines, newLines...)
+	if atBottom {
+		m.cursor = m.sourceLen() - 1
+		m.yOffset = m.sourceLen() - m.viewport.Height
+		m.clampY()
+	}
 	m.refreshView()
-	m.viewport.SetYOffset(savedOffset)
 }
 
 // SetTitle updates the title shown in the viewer header.
@@ -131,6 +139,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 3
+		m.clampY()
+		m.refreshView()
 
 	case watchTickMsg:
 		if m.watching {
@@ -149,11 +159,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleNav(msg)
 	}
 
-	if m.ready {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
 	return m, nil
 }
 
@@ -168,7 +173,7 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.matches = nil
 			m.matchIdx = 0
 			m.filterMode = false
-			m.viewport.SetContent(strings.Join(m.lines, "\n"))
+			m.refreshView()
 			return m, nil
 		}
 		return m, func() tea.Msg { return BackMsg{} }
@@ -207,31 +212,66 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "n":
 		if len(m.matches) > 0 {
 			m.matchIdx = (m.matchIdx + 1) % len(m.matches)
-			m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
+			m.cursor = m.visibleOffset(m.matchIdx)
+			m.scrollToCursor()
+			m.refreshView()
 		}
 		return m, nil
 
 	case "N":
 		if len(m.matches) > 0 {
 			m.matchIdx = (m.matchIdx - 1 + len(m.matches)) % len(m.matches)
-			m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
+			m.cursor = m.visibleOffset(m.matchIdx)
+			m.scrollToCursor()
+			m.refreshView()
+		}
+		return m, nil
+
+	case "j", "down":
+		if m.cursor < m.sourceLen()-1 {
+			m.cursor++
+			m.scrollToCursor()
+			m.refreshView()
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.cursor > 0 {
+			m.cursor--
+			m.scrollToCursor()
+			m.refreshView()
 		}
 		return m, nil
 
 	case "g":
-		m.viewport.GotoTop()
+		m.cursor = 0
+		m.yOffset = 0
+		m.refreshView()
 		return m, nil
 
 	case "G":
-		m.viewport.GotoBottom()
+		m.cursor = m.sourceLen() - 1
+		m.yOffset = m.sourceLen() - m.viewport.Height
+		m.clampY()
+		m.refreshView()
 		return m, nil
 
 	case "ctrl+d":
-		m.viewport.HalfViewDown()
+		m.cursor += m.viewport.Height / 2
+		if m.cursor >= m.sourceLen() {
+			m.cursor = m.sourceLen() - 1
+		}
+		m.scrollToCursor()
+		m.refreshView()
 		return m, nil
 
 	case "ctrl+u":
-		m.viewport.HalfViewUp()
+		m.cursor -= m.viewport.Height / 2
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.scrollToCursor()
+		m.refreshView()
 		return m, nil
 
 	case "L":
@@ -255,9 +295,7 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -272,7 +310,7 @@ func (m Model) handleSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.matches = nil
 		m.matchIdx = 0
 		m.filterMode = false
-		m.viewport.SetContent(strings.Join(m.lines, "\n"))
+		m.refreshView()
 	case "enter":
 		m.searching = false
 		m.applySearch()
@@ -294,7 +332,7 @@ func (m *Model) applySearch() {
 	if m.pattern == "" {
 		m.matches = nil
 		m.filterMode = false
-		m.viewport.SetContent(strings.Join(m.lines, "\n"))
+		m.refreshView()
 		return
 	}
 
@@ -306,10 +344,11 @@ func (m *Model) applySearch() {
 	}
 
 	m.matchIdx = 0
-	m.refreshView()
 	if len(m.matches) > 0 {
-		m.viewport.SetYOffset(m.visibleOffset(0))
+		m.cursor = m.visibleOffset(0)
+		m.scrollToCursor()
 	}
+	m.refreshView()
 }
 
 func (m Model) handleJump(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -337,7 +376,10 @@ func (m Model) handleJump(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if n > len(m.lines) {
 			n = len(m.lines)
 		}
-		m.viewport.SetYOffset(n - 1)
+		m.cursor = n - 1
+		m.yOffset = n - 1
+		m.clampY()
+		m.refreshView()
 		m.jumpInput = ""
 	case "backspace", "ctrl+h":
 		if len(m.jumpInput) > 0 {
@@ -383,38 +425,110 @@ func (m *Model) lineMatches(line string) bool {
 	return false
 }
 
-// refreshView rebuilds viewport content based on filterMode and showLineNums.
-func (m *Model) refreshView() {
-	width := len(fmt.Sprintf("%d", len(m.lines)))
+// sourceLen returns the number of lines in the current view (filtered or all).
+func (m *Model) sourceLen() int {
+	if m.filterMode {
+		return len(m.matches)
+	}
+	return len(m.lines)
+}
 
+// scrollToCursor adjusts yOffset so the cursor line is always visible.
+func (m *Model) scrollToCursor() {
+	if m.cursor < m.yOffset {
+		m.yOffset = m.cursor
+	}
+	if m.cursor >= m.yOffset+m.viewport.Height {
+		m.yOffset = m.cursor - m.viewport.Height + 1
+	}
+	m.clampY()
+}
+
+// clampY keeps yOffset within valid bounds.
+func (m *Model) clampY() {
+	max := m.sourceLen() - m.viewport.Height
+	if max < 0 {
+		max = 0
+	}
+	if m.yOffset > max {
+		m.yOffset = max
+	}
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+}
+
+// scrollPct returns scroll position as 0-100.
+func (m *Model) scrollPct() int {
+	total := m.sourceLen()
+	if total <= m.viewport.Height {
+		return 100
+	}
+	return int(float64(m.yOffset) / float64(total-m.viewport.Height) * 100)
+}
+
+// refreshView rebuilds only the visible window of lines — O(viewport.Height),
+// not O(total lines). Fast regardless of file size.
+func (m *Model) refreshView() {
+	lineNumWidth := len(fmt.Sprintf("%d", len(m.lines)))
 	pats := m.patterns()
+	h := m.viewport.Height
+	start := m.yOffset
+
+	var rendered []string
 
 	if m.filterMode {
-		var filtered []string
-		for i, idx := range m.matches {
-			line := highlightAll(m.lines[idx], pats, m.caseSensitive)
-			filtered = append(filtered, m.prefixLine(line, idx+1, i, width))
+		end := start + h
+		if end > len(m.matches) {
+			end = len(m.matches)
 		}
-		m.viewport.SetContent(strings.Join(filtered, "\n"))
-		m.viewport.GotoTop()
-		return
+		for i := start; i < end; i++ {
+			idx := m.matches[i]
+			line := m.lines[idx]
+			var r string
+			if i == m.cursor {
+				r = m.prefixLine(renderCursorLine(line), idx+1, i, lineNumWidth)
+			} else {
+				r = m.prefixLine(highlightAll(line, pats, m.caseSensitive), idx+1, i, lineNumWidth)
+			}
+			rendered = append(rendered, r)
+		}
+	} else {
+		end := start + h
+		if end > len(m.lines) {
+			end = len(m.lines)
+		}
+		for i := start; i < end; i++ {
+			line := m.lines[i]
+			var r string
+			if i == m.cursor {
+				r = m.prefixLine(renderCursorLine(line), i+1, i, lineNumWidth)
+			} else {
+				r = line
+				if m.showLogLevel {
+					r = colorizeLevel(r)
+				}
+				if m.pattern != "" && m.lineMatches(line) {
+					r = highlightAll(line, pats, m.caseSensitive)
+				}
+				r = m.prefixLine(r, i+1, i, lineNumWidth)
+			}
+			rendered = append(rendered, r)
+		}
 	}
 
-	highlighted := make([]string, len(m.lines))
-	for i, line := range m.lines {
-		rendered := line
-		if m.showLogLevel {
-			rendered = colorizeLevel(rendered)
-		}
-		if m.pattern != "" && m.lineMatches(line) {
-			rendered = highlightAll(line, pats, m.caseSensitive)
-		}
-		highlighted[i] = m.prefixLine(rendered, i+1, i, width)
+	m.viewport.SetContent(strings.Join(rendered, "\n"))
+	m.viewport.GotoTop()
+}
+
+// renderCursorLine renders a line with a vim-style block cursor:
+// first character is bold+reversed, the rest is dimmed.
+func renderCursorLine(line string) string {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return cursorCharStyle.Render(" ")
 	}
-	m.viewport.SetContent(strings.Join(highlighted, "\n"))
-	if len(m.matches) > 0 {
-		m.viewport.SetYOffset(m.visibleOffset(m.matchIdx))
-	}
+	return cursorCharStyle.Render(string(runes[0])) + string(runes[1:])
 }
 
 // colorizeLevel highlights exact uppercase level keywords inline,
@@ -539,15 +653,17 @@ func (m *Model) exportFiltered() string {
 	return fmt.Sprintf("saved → %s (%d lines)", filename, len(m.matches))
 }
 
-// reloadFile re-reads the file and updates the viewport, keeping scroll at bottom.
+// reloadFile re-reads the file and scrolls to bottom.
 func (m *Model) reloadFile() {
 	content, err := logs.Read(m.file)
 	if err != nil {
 		return
 	}
 	m.lines = strings.Split(content, "\n")
+	m.cursor = m.sourceLen() - 1
+	m.yOffset = m.sourceLen() - m.viewport.Height
+	m.clampY()
 	m.refreshView()
-	m.viewport.GotoBottom()
 }
 
 func caseLabel(sensitive bool) string {
@@ -645,7 +761,7 @@ func (m Model) View() string {
 		)
 
 	default:
-		pct := int(m.viewport.ScrollPercent() * 100)
+		pct := m.scrollPct()
 		lineNumHint := "off"
 		if m.showLineNums {
 			lineNumHint = "on"
