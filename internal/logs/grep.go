@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/permaditya/log-manager/internal/sshclient"
 )
 
 // GrepAll searches pattern across all log files in dir.
@@ -369,6 +371,235 @@ func splitPatterns(pattern string) []string {
 		}
 	}
 	return result
+}
+
+// UniqueSSHSources returns one SSHConfig per distinct host+path from a file list.
+func UniqueSSHSources(files []LogFile) []SSHConfig {
+	seen := map[string]bool{}
+	var result []SSHConfig
+	for _, f := range files {
+		if f.SSH == nil {
+			continue
+		}
+		key := fmt.Sprintf("%s@%s:%d:%s", f.SSH.User, f.SSH.Host, f.SSH.Port, f.SSH.Path)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, *f.SSH)
+		}
+	}
+	return result
+}
+
+// GrepStreamFiles searches pattern across a pre-built file list (local + SSH).
+func GrepStreamFiles(files []LogFile, pattern string, caseSensitive bool) <-chan GrepChunk {
+	ch := make(chan GrepChunk, 32)
+	go func() {
+		defer close(ch)
+		if pattern == "" || len(files) == 0 {
+			ch <- GrepChunk{Done: true}
+			return
+		}
+
+		var localFiles []LogFile
+		sshGroups := map[string][]LogFile{}
+		sshCfgMap := map[string]SSHConfig{}
+		for _, f := range files {
+			if f.SSH == nil {
+				localFiles = append(localFiles, f)
+			} else {
+				key := fmt.Sprintf("%s@%s:%d:%s", f.SSH.User, f.SSH.Host, f.SSH.Port, f.SSH.Path)
+				sshGroups[key] = append(sshGroups[key], f)
+				sshCfgMap[key] = *f.SSH
+			}
+		}
+
+		type result struct {
+			content string
+			count   int
+		}
+		numWorkers := len(sshGroups)
+		if len(localFiles) > 0 {
+			numWorkers++
+		}
+		if numWorkers == 0 {
+			ch <- GrepChunk{Done: true}
+			return
+		}
+
+		resultCh := make(chan result, numWorkers)
+
+		// Local grep — reuse existing per-file workers.
+		if len(localFiles) > 0 {
+			go func() {
+				grepBin, _ := exec.LookPath("grep")
+				zcatBin, _ := exec.LookPath("zcat")
+				re := buildRegexp(pattern, caseSensitive)
+				inner := make(chan result, len(localFiles))
+				for _, f := range localFiles {
+					go func(lf LogFile) {
+						var lines []string
+						if grepBin != "" {
+							switch {
+							case lf.Compressed && zcatBin != "":
+								lines = grepGzWithZcat(zcatBin, grepBin, lf, pattern, caseSensitive)
+							case !lf.Compressed:
+								lines = grepFileBin(grepBin, lf, pattern, caseSensitive)
+							case re != nil:
+								lines = grepFileGo(lf, re)
+							}
+						} else if re != nil {
+							lines = grepFileGo(lf, re)
+						}
+						var sb strings.Builder
+						for _, l := range lines {
+							sb.WriteString(l)
+						}
+						inner <- result{content: sb.String(), count: len(lines)}
+					}(f)
+				}
+				var sb strings.Builder
+				total := 0
+				for range localFiles {
+					r := <-inner
+					total += r.count
+					sb.WriteString(r.content)
+				}
+				resultCh <- result{content: sb.String(), count: total}
+			}()
+		}
+
+		// SSH grep — one goroutine per server.
+		for key, sshFiles := range sshGroups {
+			cfg := sshCfgMap[key]
+			go func(c SSHConfig, fs []LogFile) {
+				content, count := grepSSH(c, fs, pattern, caseSensitive)
+				resultCh <- result{content: content, count: count}
+			}(cfg, sshFiles)
+		}
+
+		total := 0
+		for i := 0; i < numWorkers; i++ {
+			r := <-resultCh
+			total += r.count
+			if r.content != "" {
+				ch <- GrepChunk{Content: r.content, Count: r.count}
+			}
+		}
+		ch <- GrepChunk{Done: true, Total: total}
+	}()
+	return ch
+}
+
+// grepSSH runs grep on a remote server for the given files.
+func grepSSH(cfg SSHConfig, files []LogFile, pattern string, caseSensitive bool) (string, int) {
+	pathToName := map[string]string{}
+	var plainPaths, gzPaths []string
+	for _, f := range files {
+		pathToName[f.Path] = f.Name
+		if f.Compressed {
+			gzPaths = append(gzPaths, f.Path)
+		} else {
+			plainPaths = append(plainPaths, f.Path)
+		}
+	}
+
+	flags := "-En --color=never"
+	if !caseSensitive {
+		flags += " -i"
+	}
+	quoted := shellQuote(pattern)
+
+	var parts []string
+	if len(plainPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("grep %s %s %s 2>/dev/null",
+			flags, quoted, strings.Join(plainPaths, " ")))
+	}
+	for _, gz := range gzPaths {
+		name := pathToName[gz]
+		parts = append(parts, fmt.Sprintf("zcat %s 2>/dev/null | grep %s %s | sed 's|^|%s:|'",
+			gz, flags, quoted, name))
+	}
+	if len(parts) == 0 {
+		return "", 0
+	}
+
+	cmd := strings.Join(parts, "; ") + " || true"
+	out, err := sshclient.Default.RunCommand(cfg.User, cfg.Host, cfg.Port, cfg.Identity, cfg.Password, cmd)
+	if err != nil || len(out) == 0 {
+		return "", 0
+	}
+
+	var sb strings.Builder
+	count := 0
+	prefix := "[" + cfg.Name + "] "
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		// Shorten full remote path to just filename.
+		for path, name := range pathToName {
+			if strings.HasPrefix(line, path) {
+				line = name + line[len(path):]
+				break
+			}
+		}
+		sb.WriteString(prefix + line + "\n")
+		count++
+	}
+	return sb.String(), count
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ShellStreamAll runs a shell command locally and on all SSH sources.
+// On each SSH source, the command runs with the log path as working directory.
+func ShellStreamAll(localDir string, sshSources []SSHConfig, cmd string) <-chan GrepChunk {
+	ch := make(chan GrepChunk, 4)
+	go func() {
+		defer close(ch)
+		if cmd == "" {
+			return
+		}
+
+		var sb strings.Builder
+		multiSource := len(sshSources) > 0
+
+		// Local.
+		if localDir != "" {
+			c := exec.Command("sh", "-c", cmd)
+			c.Dir = localDir
+			out, err := c.Output()
+			if len(out) > 0 {
+				if multiSource {
+					sb.WriteString("# local\n")
+				}
+				sb.Write(out)
+			} else if err != nil {
+				if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+					sb.Write(ee.Stderr)
+				}
+			}
+		}
+
+		// SSH sources.
+		for _, src := range sshSources {
+			remoteCmd := fmt.Sprintf("cd %s 2>/dev/null && %s || true", src.Path, cmd)
+			out, _ := sshclient.Default.RunCommand(src.User, src.Host, src.Port, src.Identity, src.Password, remoteCmd)
+			if len(out) > 0 {
+				sb.WriteString(fmt.Sprintf("# %s\n", src.Name))
+				sb.Write(out)
+			}
+		}
+
+		content := sb.String()
+		if content != "" {
+			ch <- GrepChunk{Content: content}
+		}
+		ch <- GrepChunk{Done: true, Total: strings.Count(content, "\n")}
+	}()
+	return ch
 }
 
 // lineMatchesAny returns true if line contains any of the patterns — used by viewer.

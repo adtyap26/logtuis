@@ -37,6 +37,12 @@ type GrepDoneMsg struct {
 
 const previewLines = 15
 
+// SSHStatus holds the name and connection state of an SSH source.
+type SSHStatus struct {
+	Name      string
+	Connected bool
+}
+
 var (
 	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Padding(0, 1)
 	selectedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
@@ -50,6 +56,9 @@ var (
 	previewStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
 	checkedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	archiveStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
+	sshTagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan for remote source tag
+	connectedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	failedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 )
 
 type inputMode int
@@ -86,18 +95,21 @@ type Model struct {
 	selected          map[int]bool // indices into m.filtered
 	archiving         bool
 	archiveMsg        string
+	showLineNums      bool
+	sshStatus         []SSHStatus
 }
 
-func New(dir string, files []logs.LogFile) Model {
+func New(dir string, files []logs.LogFile, sshStatus []SSHStatus) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 
 	m := Model{
-		dir:      dir,
-		all:      files,
-		filtered: files,
-		spinner:  sp,
+		dir:       dir,
+		all:       files,
+		filtered:  files,
+		spinner:   sp,
+		sshStatus: sshStatus,
 	}
 	m.updatePreview()
 	return m
@@ -168,6 +180,8 @@ func (m Model) handleNav(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.cursor = len(m.filtered) - 1
 			m.updatePreview()
 		}
+	case "L":
+		m.showLineNums = !m.showLineNums
 	case "V":
 		if m.selecting {
 			m.selecting = false
@@ -277,12 +291,11 @@ func (m Model) handleGrepInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		pattern := m.search
-		dir := m.dir
 		cs := m.grepCaseSensitive
 		m.mode = modeNormal
 		m.search = ""
 		m.grepLoading = true
-		ch := logs.GrepStream(dir, pattern, cs)
+		ch := logs.GrepStreamFiles(m.all, pattern, cs)
 		startCmd := func() tea.Msg {
 			return GrepStartMsg{Pattern: pattern, Ch: ch}
 		}
@@ -327,7 +340,7 @@ func (m Model) handleShellInput(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.search = ""
 		m.shellCursor = 0
 		m.grepLoading = true
-		ch := logs.ShellStream(dir, cmd)
+		ch := logs.ShellStreamAll(dir, logs.UniqueSSHSources(m.all), cmd)
 		startCmd := func() tea.Msg {
 			return GrepStartMsg{Pattern: cmd, Ch: ch}
 		}
@@ -444,7 +457,21 @@ func formatDate(t time.Time) string {
 func (m Model) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n\n")
+	sb.WriteString(titleStyle.Render(" Log Viewer") + "\n")
+
+	// SSH connection status bar
+	if len(m.sshStatus) > 0 {
+		var parts []string
+		for _, s := range m.sshStatus {
+			if s.Connected {
+				parts = append(parts, connectedStyle.Render("● "+s.Name))
+			} else {
+				parts = append(parts, failedStyle.Render("● "+s.Name))
+			}
+		}
+		sb.WriteString("  " + strings.Join(parts, "   ") + "\n")
+	}
+	sb.WriteString("\n")
 
 	// input bar
 	switch {
@@ -477,7 +504,7 @@ func (m Model) View() string {
 		if m.search != "" {
 			sb.WriteString(searchStyle.Render(" / "+m.search) + statusStyle.Render("  (esc to clear)") + "\n\n")
 		} else {
-			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep all • ctrl+s shell • V archive • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
+			sb.WriteString(helpStyle.Render(" / filter • ctrl+f grep • ctrl+s shell • V archive • L line nums • j/k navigate • enter open • ctrl+r reload • q quit") + "\n\n")
 		}
 	}
 
@@ -486,8 +513,12 @@ func (m Model) View() string {
 		return sb.String()
 	}
 
-	// reserve space: header(2) + input(2) + separator(1) + status(2) + preview header(1) + preview lines
-	reserved := 8 + previewLines
+	// title(2) + input(2) + blank+sep(2) + status(1) + prevhdr(1) + previewLines + 2 wrap-buffer.
+	// Always reserve preview space so layout stays stable when navigating empty/non-empty files.
+	reserved := 10 + previewLines
+	if len(m.sshStatus) > 0 {
+		reserved++
+	}
 	listH := m.height - reserved
 	if listH < 3 {
 		listH = 3
@@ -518,6 +549,7 @@ func (m Model) View() string {
 	}
 
 	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	lineNumWidth := len(fmt.Sprintf("%d", len(m.filtered)))
 	for i := start; i < end; i++ {
 		f := m.filtered[i]
 		nameStyle := normalStyle
@@ -525,7 +557,24 @@ func (m Model) View() string {
 			nameStyle = gzStyle
 		}
 
-		namePad := fmt.Sprintf("%-*s", maxName, f.Name)
+		// Line number prefix (1-based, right-aligned).
+		lineNum := ""
+		if m.showLineNums {
+			lineNum = statusStyle.Render(fmt.Sprintf("%*d ", lineNumWidth, i+1))
+		}
+
+		// Build display name: prepend [source] tag for SSH files.
+		displayName := f.Name
+		if f.SSH != nil {
+			label := f.SSH.Name
+			if label == "" {
+				label = f.SSH.Host
+			}
+			displayName = sshTagStyle.Render("["+label+"] ") + nameStyle.Render(f.Name)
+		} else {
+			displayName = nameStyle.Render(f.Name)
+		}
+
 		meta := ""
 		if !f.ModTime.IsZero() {
 			ownerPad := fmt.Sprintf("%-*s", maxOwner, f.Owner)
@@ -539,9 +588,9 @@ func (m Model) View() string {
 		}
 
 		if i == m.cursor {
-			sb.WriteString(selectedStyle.Render(" > ") + check + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString(selectedStyle.Render(" > ") + check + lineNum + displayName + meta + "\n")
 		} else {
-			sb.WriteString("   " + check + nameStyle.Render(namePad) + meta + "\n")
+			sb.WriteString("   " + check + lineNum + displayName + meta + "\n")
 		}
 	}
 
@@ -551,16 +600,26 @@ func (m Model) View() string {
 	sb.WriteString("\n" + statusStyle.Render(sep) + "\n")
 	sb.WriteString(statusStyle.Render(fmt.Sprintf("  %d/%d files", len(m.filtered), len(m.all))) + "\n")
 
-	// preview pane
-	if m.preview != "" {
+	// preview pane — always rendered to keep layout stable
+	if len(m.filtered) > 0 {
 		selected := m.filtered[m.cursor]
-		sb.WriteString(previewHdrStyle.Render(" Preview: "+selected.Name) + "\n")
-		for _, line := range strings.Split(m.preview, "\n") {
-			// truncate long lines to terminal width
-			if m.width > 4 && len(line) > m.width-4 {
-				line = line[:m.width-4] + "…"
+		sb.WriteString(previewHdrStyle.Render(" Log Preview: "+selected.Name) + "\n")
+		lines := strings.Split(m.preview, "\n")
+		if m.preview == "" {
+			lines = nil
+		}
+		for i := 0; i < previewLines; i++ {
+			if i < len(lines) {
+				line := lines[i]
+				if m.width > 4 && len(line) > m.width-4 {
+					line = line[:m.width-4] + "…"
+				}
+				sb.WriteString(previewStyle.Render("  "+line) + "\n")
+			} else if i == 0 && m.preview == "" {
+				sb.WriteString(statusStyle.Render("  (no content)") + "\n")
+			} else {
+				sb.WriteString("\n")
 			}
-			sb.WriteString(previewStyle.Render("  "+line) + "\n")
 		}
 	}
 
