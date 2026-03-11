@@ -486,8 +486,12 @@ func (m Model) View() string {
 		return sb.String()
 	}
 
-	// reserve space: header(2) + input(2) + separator(1) + status(2) + preview header(1) + preview lines
-	reserved := 8 + previewLines
+	// Base: title(2) + input(2) + blank+sep(2) + status(1) + prevhdr(1) + 2 wrap-buffer = 10.
+	// Add previewLines only when preview is actually shown — gives more list space when no preview.
+	reserved := 10
+	if m.preview != "" {
+		reserved += previewLines
+	}
 	listH := m.height - reserved
 	if listH < 3 {
 		listH = 3
@@ -567,7 +571,7 @@ func (m Model) View() string {
 	// preview pane
 	if m.preview != "" {
 		selected := m.filtered[m.cursor]
-		sb.WriteString(previewHdrStyle.Render(" Preview: "+selected.Name) + "\n")
+		sb.WriteString(previewHdrStyle.Render(" Log Preview: "+selected.Name) + "\n")
 		for _, line := range strings.Split(m.preview, "\n") {
 			// truncate long lines to terminal width
 			if m.width > 4 && len(line) > m.width-4 {

@@ -123,17 +123,26 @@ func (m Model) View() string {
 
 	sb.WriteString(titleStyle.Render(" logtuis — select sources") + "\n\n")
 
+	// Compute dynamic label column width.
+	maxLabel := 5 // minimum width
+	for _, s := range m.sources {
+		if len(s.Label) > maxLabel {
+			maxLabel = len(s.Label)
+		}
+	}
+
 	for i, s := range m.sources {
 		check := dimStyle.Render("[ ]")
 		if m.selected[i] {
 			check = checkedStyle.Render("[✓]")
 		}
 
+		labelFmt := fmt.Sprintf("  %-*s  ", maxLabel, s.Label)
 		var label string
 		if s.IsLocal {
-			label = normalStyle.Render(fmt.Sprintf("  %-12s", s.Label)) + dimStyle.Render(s.Detail)
+			label = normalStyle.Render(labelFmt) + dimStyle.Render(s.Detail)
 		} else {
-			label = sshTagStyle.Render(fmt.Sprintf("  %-12s", s.Label)) + dimStyle.Render(s.Detail)
+			label = sshTagStyle.Render(labelFmt) + dimStyle.Render(s.Detail)
 		}
 
 		line := "  " + check + label
