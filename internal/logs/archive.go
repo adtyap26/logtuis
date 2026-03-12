@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Archive writes the given LogFiles into a tar.gz at destPath.
@@ -32,6 +33,10 @@ func Archive(files []LogFile, destPath string) error {
 }
 
 func addToArchive(tw *tar.Writer, lf LogFile) error {
+	if lf.SSH != nil {
+		return addSSHToArchive(tw, lf)
+	}
+
 	info, err := os.Stat(lf.Path)
 	if err != nil {
 		return err
@@ -54,5 +59,26 @@ func addToArchive(tw *tar.Writer, lf LogFile) error {
 	defer f.Close()
 
 	_, err = io.Copy(tw, f)
+	return err
+}
+
+func addSSHToArchive(tw *tar.Writer, lf LogFile) error {
+	content, err := Read(lf)
+	if err != nil {
+		return err
+	}
+
+	data := []byte(content)
+	hdr := &tar.Header{
+		Name:    lf.Name,
+		Size:    int64(len(data)),
+		Mode:    int64(lf.Mode),
+		ModTime: lf.ModTime,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(tw, strings.NewReader(content))
 	return err
 }
